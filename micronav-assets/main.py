@@ -258,6 +258,10 @@ class MicroNavSystem:
             instruction = data.get('instruction', '')
             logger.info(f"🧭 Istruzione: {instruction[:50]}...")
             
+            # Pulisci il display prima di mostrare la nuova istruzione
+            self.display_controller.clear_display()
+            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
+            
             # Mostra istruzione sul display
             self.display_controller.show_navigation_instruction(data)
             

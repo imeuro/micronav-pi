@@ -316,6 +316,11 @@ class MicroNavDisplayController:
             return
         
         try:
+            # Pulisci lo schermo prima di mostrare la schermata idle
+            logger.debug("Pulizia schermo prima di schermata idle")
+            self.clear_display()
+            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
+            
             logger.debug("Mostrando schermata idle")
             
             with canvas(self.device) as draw:
@@ -377,7 +382,7 @@ class MicroNavDisplayController:
             # Pulisci lo schermo prima di mostrare l'istruzione
             logger.debug("Pulizia schermo prima di istruzione")
             self.clear_display()
-            time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
             
             logger.debug(f"Inizio visualizzazione istruzione: {instruction_data.get('instruction', '')[:30]}...")
             instruction = instruction_data.get('instruction', '')
@@ -467,7 +472,7 @@ class MicroNavDisplayController:
             # Pulisci lo schermo prima di mostrare la panoramica
             logger.debug("Pulizia schermo prima di panoramica")
             self.clear_display()
-            time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
             origin = route_data.get('origin', '')
             destination = route_data.get('destination', '')
             total_distance = route_data.get('totalDistance', 0)
@@ -579,6 +584,10 @@ class MicroNavDisplayController:
             return
         
         try:
+            # Pulisci lo schermo prima di mostrare la schermata di errore
+            logger.debug("Pulizia schermo prima di schermata errore")
+            self.clear_display()
+            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
             with canvas(self.device) as draw:
                 # Sfondo rosso
                 draw.rectangle(
