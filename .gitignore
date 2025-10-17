@@ -1,0 +1,14 @@
+.env
+*.md
+*.zip
+*.tar
+*.gz
+
+*.log
+
+micronav-assets/__pycache__
+micronav-assets/logs/micronav.log
+micronav-assets/venv
+
+push.sh
+micronav.service
