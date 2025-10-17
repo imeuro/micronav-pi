@@ -4,6 +4,9 @@
 *.tar
 *.gz
 
+.DS_Store
+**/.DS_Store
+
 *.log
 
 micronav-assets/__pycache__
