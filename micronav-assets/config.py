@@ -5,17 +5,23 @@ Contiene tutte le impostazioni per MQTT, display, WiFi e sistema
 """
 
 import os
+from dotenv import load_dotenv
 from typing import Dict, Any
+
+# Carica il file .env
+load_dotenv()
+
+BASE_PATH = os.getenv('BASE_PATH')
 
 # Configurazione Sistema
 SYSTEM_CONFIG = {
     'app_name': 'MicroNav',
     'version': '0.2.0',
     'base_path': os.getenv('BASE_PATH'),
-    'logs_path': os.getenv('BASE_PATH') + '/logs/',
-    'config_path': os.getenv('BASE_PATH') + '/config/',
-    'assets_path': os.getenv('BASE_PATH') + '/micronav-assets/',
-    'pid_file': os.getenv('BASE_PATH') + '/micronav.pid',
+    'logs_path': f'{BASE_PATH}/logs/',
+    'config_path': f'{BASE_PATH}/config/',
+    'assets_path': f'{BASE_PATH}/micronav-assets/',
+    'pid_file': f'{BASE_PATH}/micronav.pid',
     'service_name': 'micronav.service'
 }
 
@@ -126,7 +132,7 @@ COLORS = {
 FONT_CONFIG = {
     'lcd_fonts': {
         'paths': [
-            '/home/micronav/micronav-assets/font/LcdSolid-VPzB.ttf',
+            f'{BASE_PATH}/micronav-assets/font/LcdSolid-VPzB.ttf',
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         ],
         'sizes': {
@@ -137,7 +143,7 @@ FONT_CONFIG = {
     },
     'system_fonts': {
         'paths': [
-            '/home/micronav/micronav-assets/font/Figtree-Black.ttf',
+            f'{BASE_PATH}/micronav-assets/font/Figtree-Black.ttf',
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         ],
         'sizes': {
@@ -151,12 +157,12 @@ FONT_CONFIG = {
 
 BOOT_IMAGE_CONFIG = {
     # w320 x h240
-    'path': os.getenv('BASE_PATH') + '/micronav-assets/_boot.jpg',
+    'path': f'{BASE_PATH}/micronav-assets/_boot.jpg',
     'size': (320, 240),
     'time': 3
 }
 DIRECTIONS_ICONS_CONFIG = {
-    'path': os.getenv('BASE_PATH') + '/micronav-assets/directions-icons/src/png/light',
+    'path': f'{BASE_PATH}/micronav-assets/directions-icons/src/png/light',
     'size': 128
 }
 
@@ -165,7 +171,7 @@ DIRECTIONS_ICONS_CONFIG = {
 LOGGING_CONFIG = {
     'level': 'INFO',
     'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    'file': os.getenv('BASE_PATH') + '/micronav-assets/logs/micronav.log',
+    'file': f'{BASE_PATH}/micronav-assets/logs/micronav.log',
     'max_size': 10 * 1024 * 1024,  # 10MB
     'backup_count': 5
 }
