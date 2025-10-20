@@ -216,7 +216,9 @@ class MicroNavMQTTClient:
             payload.update(extra_data)
         
         try:
-            result = self.client.publish(topic, json.dumps(payload), qos=1, retain=True)
+            # Converte datetime in stringhe per serializzazione JSON
+            safe_payload = self._make_json_safe(payload)
+            result = self.client.publish(topic, json.dumps(safe_payload), qos=1, retain=True)
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
                 self.stats['messages_sent'] += 1
                 logger.info(f"Status pubblicato: {status}")
@@ -228,6 +230,23 @@ class MicroNavMQTTClient:
         except Exception as e:
             logger.error(f"Errore pubblicazione status: {e}")
             return False
+    
+    def _make_json_safe(self, obj):
+        """Converte oggetti non serializzabili in JSON in versioni sicure"""
+        if isinstance(obj, dict):
+            return {key: self._make_json_safe(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_json_safe(item) for item in obj]
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        elif hasattr(obj, '__dict__'):
+            # Per oggetti personalizzati, prova a convertire in dict
+            try:
+                return self._make_json_safe(obj.__dict__)
+            except:
+                return str(obj)
+        else:
+            return obj
     
     def register_message_handler(self, topic_pattern: str, handler: Callable):
         """
@@ -279,13 +298,13 @@ class MicroNavMQTTClient:
             self.stats['messages_received'] += 1
             self.stats['last_message_time'] = datetime.now()
             
-            logger.info(f"Messaggio ricevuto da: {topic}")
+            logger.info(f"📨 Messaggio ricevuto da: {topic}")
             
             # Parsing JSON
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError:
-                logger.error(f"Errore parsing JSON: {payload}")
+                logger.error(f"❌ Errore parsing JSON: {payload}")
                 return
             
             # Trova handler appropriato
@@ -297,7 +316,7 @@ class MicroNavMQTTClient:
                     try:
                         handler(topic_relative, data)
                     except Exception as e:
-                        logger.error(f"Errore handler {pattern}: {e}")
+                        logger.error(f"❌ Errore handler {pattern}: {e}")
                     break
             else:
                 logger.warning(f"Nessun handler per topic: {topic_relative}")

@@ -225,10 +225,12 @@ class MicroNavSystem:
             logger.info(f"📍 Percorso ricevuto: {data.get('origin', 'N/A')} → {data.get('destination', 'N/A')}")
             
             # Pulisci il display prima di mostrare il nuovo percorso
+            logger.debug("Pulizia display per nuovo percorso")
             self.display_controller.clear_display()
             time.sleep(0.5)
 
             # Mostra panoramica percorso sul display
+            logger.debug("Mostrando panoramica percorso")
             self.display_controller.show_route_overview(data)
             
             # Salva il percorso per riferimento
@@ -251,6 +253,15 @@ class MicroNavSystem:
         except Exception as e:
             logger.error(f"Errore gestione percorso: {e}")
             self.system_stats['errors_count'] += 1
+            
+            # Fallback: torna alla schermata idle in caso di errore
+            try:
+                logger.warning("Tentativo di tornare alla schermata idle dopo errore")
+                self.display_controller.clear_display()
+                time.sleep(0.3)
+                self.display_controller.show_idle_screen()
+            except Exception as fallback_error:
+                logger.error(f"Errore anche nel fallback idle: {fallback_error}")
     
     def _handle_navigation_step(self, topic: str, data: Dict[str, Any]):
         """Gestisce istruzione di navigazione"""
@@ -259,10 +270,12 @@ class MicroNavSystem:
             logger.info(f"🧭 Istruzione: {instruction[:50]}...")
             
             # Pulisci il display prima di mostrare la nuova istruzione
+            logger.debug("Pulizia display per nuova istruzione")
             self.display_controller.clear_display()
             time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
             
             # Mostra istruzione sul display
+            logger.debug("Mostrando istruzione di navigazione")
             self.display_controller.show_navigation_instruction(data)
             
             # Aggiorna statistiche
@@ -279,6 +292,15 @@ class MicroNavSystem:
         except Exception as e:
             logger.error(f"Errore gestione istruzione: {e}")
             self.system_stats['errors_count'] += 1
+            
+            # Fallback: torna alla schermata idle in caso di errore
+            try:
+                logger.warning("Tentativo di tornare alla schermata idle dopo errore istruzione")
+                self.display_controller.clear_display()
+                time.sleep(0.3)
+                self.display_controller.show_idle_screen()
+            except Exception as fallback_error:
+                logger.error(f"Errore anche nel fallback idle: {fallback_error}")
     
     def _show_first_instruction_after_delay(self, route_data: Dict[str, Any]):
         """Mostra la prima istruzione dopo un delay"""
@@ -315,6 +337,15 @@ class MicroNavSystem:
                     
             except Exception as e:
                 logger.error(f"Errore mostrando prima istruzione: {e}")
+                
+                # Fallback: torna alla schermata idle in caso di errore
+                try:
+                    logger.warning("Tentativo di tornare alla schermata idle dopo errore prima istruzione")
+                    self.display_controller.clear_display()
+                    time.sleep(0.3)
+                    self.display_controller.show_idle_screen()
+                except Exception as fallback_error:
+                    logger.error(f"Errore anche nel fallback idle: {fallback_error}")
         
         # Avvia il thread per mostrare la prima istruzione
         instruction_thread = threading.Thread(target=show_first_instruction, daemon=True)
@@ -341,13 +372,48 @@ class MicroNavSystem:
                 self.display_controller.clear_display()
                 logger.info("🧹 Display pulito")
                 
+            elif command == 'reset_display':
+                self.display_controller.reset_display()
+                logger.info("🔄 Display resettato")
+                
             elif command == 'test_display':
                 self._test_display()
                 
+            elif command == 'update_fonts':
+                logger.info("📝 Aggiornamento font richiesto via MQTT")
+                if self.update_font_sizes():
+                    self.mqtt_client.publish_status(
+                        "font_updated",
+                        "Font aggiornati con successo",
+                        {}
+                    )
+                else:
+                    self.mqtt_client.publish_status(
+                        "font_update_failed",
+                        "Errore aggiornamento font",
+                        {}
+                    )
+                
             elif command == 'set_brightness':
                 brightness = data.get('brightness', 100)
-                self.display_controller.set_brightness(brightness)
-                logger.info(f"💡 Luminosità impostata: {brightness}%")
+                
+                if self.display_controller and self.display_controller.is_initialized:
+                    self.display_controller.set_brightness(brightness)
+                    logger.info(f"💡 Luminosità impostata: {brightness}%")
+                    
+                    # Pubblica conferma
+                    self.mqtt_client.publish_status(
+                        "brightness_set",
+                        f"Luminosità impostata a {brightness}%",
+                        {"brightness": brightness}
+                    )
+                else:
+                    logger.error("❌ Display controller non disponibile o non inizializzato")
+                    self.mqtt_client.publish_status(
+                        "brightness_set_failed",
+                        "Display non disponibile",
+                        {"brightness": brightness}
+                    )
                 
             # elif command == 'wifi_scan':
             #     if self.wifi_monitor:
@@ -392,6 +458,13 @@ class MicroNavSystem:
         try:
             uptime = time.time() - self.start_time if self.start_time else 0
             
+            # Converte datetime in stringhe per serializzazione JSON
+            stats_copy = self.system_stats.copy()
+            if stats_copy['last_route_time']:
+                stats_copy['last_route_time'] = stats_copy['last_route_time'].isoformat()
+            if stats_copy['last_instruction_time']:
+                stats_copy['last_instruction_time'] = stats_copy['last_instruction_time'].isoformat()
+            
             status_data = {
                 'system': {
                     'uptime': uptime,
@@ -403,7 +476,7 @@ class MicroNavSystem:
                     'wifi': self.system_stats['wifi_connected'],
                     'display': self.system_stats['display_active']
                 },
-                'statistics': self.system_stats.copy(),
+                'statistics': stats_copy,
                 'timestamp': int(time.time())
             }
             
@@ -590,6 +663,15 @@ class MicroNavSystem:
         except Exception as e:
             logger.error(f"Errore arresto sistema: {e}")
     
+    def update_font_sizes(self):
+        """Aggiorna le dimensioni dei font del display"""
+        if self.display_controller:
+            logger.info("📝 Aggiornamento dimensioni font richiesto")
+            return self.display_controller.update_font_sizes()
+        else:
+            logger.warning("⚠️ Display controller non disponibile")
+            return False
+    
     def run(self):
         """Loop principale del sistema"""
         try:
@@ -603,6 +685,9 @@ class MicroNavSystem:
                 # Verifica stato sistema
                 if not self.system_stats['mqtt_connected']:
                     logger.warning("⚠️  MQTT disconnesso")
+                    # Aggiorna indicatore MQTT sul display
+                    if self.display_controller:
+                        self.display_controller._draw_mqtt_indicator(self.display_controller.draw, False)
                 
                 # if not self.system_stats['wifi_connected']:
                 #     logger.warning("⚠️  WiFi disconnesso")

@@ -17,11 +17,11 @@ BASE_PATH = os.getenv('BASE_PATH')
 SYSTEM_CONFIG = {
     'app_name': 'MicroNav',
     'version': '0.2.0',
-    'base_path': os.getenv('BASE_PATH'),
-    'logs_path': f'{BASE_PATH}/logs/',
-    'config_path': f'{BASE_PATH}/config/',
-    'assets_path': f'{BASE_PATH}/micronav-assets/',
-    'pid_file': f'{BASE_PATH}/micronav.pid',
+    'base_path': BASE_PATH,
+    'logs_path': BASE_PATH + '/logs/',
+    'config_path': BASE_PATH + '/config/',
+    'assets_path': BASE_PATH + '/micronav-assets/',
+    'pid_file': BASE_PATH + '/micronav.pid',
     'service_name': 'micronav.service'
 }
 
@@ -132,24 +132,24 @@ COLORS = {
 FONT_CONFIG = {
     'lcd_fonts': {
         'paths': [
-            f'{BASE_PATH}/micronav-assets/font/LcdSolid-VPzB.ttf',
+            BASE_PATH + '/micronav-assets/font/LcdSolid-VPzB.ttf',
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         ],
         'sizes': {
             'small': 12,
-            'medium': 16,
+            'medium': 18,
             'large': 24
         }
     },
     'system_fonts': {
         'paths': [
-            f'{BASE_PATH}/micronav-assets/font/Figtree-Black.ttf',
+            BASE_PATH + '/micronav-assets/font/Figtree-Black.ttf',
             '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         ],
         'sizes': {
             'small': 14,
             'medium': 18,
-            'large': 32
+            'large': 36
         }
     }
 }
@@ -157,12 +157,12 @@ FONT_CONFIG = {
 
 BOOT_IMAGE_CONFIG = {
     # w320 x h240
-    'path': f'{BASE_PATH}/micronav-assets/_boot.jpg',
+    'path': BASE_PATH + '/micronav-assets/_boot.jpg',
     'size': (320, 240),
     'time': 3
 }
 DIRECTIONS_ICONS_CONFIG = {
-    'path': f'{BASE_PATH}/micronav-assets/directions-icons/src/png/light',
+    'path': BASE_PATH + '/micronav-assets/directions-icons/src/png/light',
     'size': 128
 }
 
@@ -171,7 +171,7 @@ DIRECTIONS_ICONS_CONFIG = {
 LOGGING_CONFIG = {
     'level': 'INFO',
     'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    'file': f'{BASE_PATH}/micronav-assets/logs/micronav.log',
+    'file': BASE_PATH + '/micronav-assets/logs/micronav.log',
     'max_size': 10 * 1024 * 1024,  # 10MB
     'backup_count': 5
 }

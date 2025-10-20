@@ -7,6 +7,7 @@ Gestisce il display TFT ST7789 1.47" per visualizzare istruzioni di navigazione
 import time
 import logging
 import threading
+import importlib
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -21,7 +22,7 @@ except ImportError:
     print("❌ Librerie display non trovate. Installa con: pip install luma.lcd luma.core")
     exit(1)
 
-from config import get_display_config, get_gpio_config, get_colors_config, get_font_config, get_boot_image_config, get_directions_icons_config
+import config
 from logging_config import get_logger
 
 # Inizializza logging
@@ -40,12 +41,7 @@ class MicroNavDisplayController:
         self.running = False
         
         # Configurazione
-        self.config = get_display_config()
-        self.gpio_config = get_gpio_config()
-        self.colors = get_colors_config()
-        self.font_config = get_font_config()
-        self.boot_image_config = get_boot_image_config()
-        self.directions_icons_config = get_directions_icons_config()
+        self._load_config()
 
         
         # Font e dimensioni
@@ -74,6 +70,38 @@ class MicroNavDisplayController:
         self.icon_cache = {}
         
         logger.debug("Display Controller MicroNav inizializzato")
+    
+    def _load_config(self):
+        """Carica la configurazione dal modulo config"""
+        self.config = config.get_display_config()
+        self.gpio_config = config.get_gpio_config()
+        self.colors = config.get_colors_config()
+        self.font_config = config.get_font_config()
+        self.boot_image_config = config.get_boot_image_config()
+        self.directions_icons_config = config.get_directions_icons_config()
+    
+    def reload_config_and_fonts(self):
+        """Ricarica la configurazione e i font con le nuove dimensioni"""
+        try:
+            logger.info("🔄 Ricaricamento configurazione e font...")
+            
+            # Ricarica il modulo config
+            importlib.reload(config)
+            logger.debug("✅ Modulo config ricaricato")
+            
+            # Ricarica la configurazione
+            self._load_config()
+            logger.debug("✅ Configurazione ricaricata")
+            
+            # Ricarica i font con le nuove dimensioni
+            self._load_fonts()
+            logger.info("✅ Font ricaricati con nuove dimensioni")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Errore ricaricamento configurazione: {e}")
+            return False
     
     def initialize_display(self) -> bool:
         """Inizializza il display TFT ST7789"""
@@ -293,9 +321,32 @@ class MicroNavDisplayController:
     def clear_display(self):
         """Pulisce il display"""
         if not self.is_initialized:
+            logger.warning("Display non inizializzato, impossibile pulire")
             return
         
         try:
+            # Verifica che GPIO sia configurato
+            if not hasattr(GPIO, '_mode'):
+                logger.debug("GPIO non configurato, riconfigurazione...")
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+            
+            # Verifica che i pin siano configurati come OUTPUT
+            try:
+                # Prova a usare un pin per vedere se è configurato
+                GPIO.output(self.gpio_config['TFT_BL'], GPIO.HIGH)
+            except RuntimeError as e:
+                if "not been set up as an OUTPUT" in str(e):
+                    logger.debug("Pin GPIO non configurati, riconfigurazione...")
+                    # Riconfigura tutti i pin
+                    GPIO.setup(self.gpio_config['TFT_CS'], GPIO.OUT)
+                    GPIO.setup(self.gpio_config['TFT_DC'], GPIO.OUT)
+                    GPIO.setup(self.gpio_config['TFT_RST'], GPIO.OUT)
+                    GPIO.setup(self.gpio_config['TFT_BL'], GPIO.OUT)
+                    logger.debug("✅ Pin GPIO riconfigurati")
+                else:
+                    raise e
+            
             with canvas(self.device) as draw:
                 draw.rectangle(
                     (0, 0, self.config['width'], self.config['height']),
@@ -306,7 +357,59 @@ class MicroNavDisplayController:
             # Se c'è un errore, prova a riconfigurare GPIO
             try:
                 GPIO.setmode(GPIO.BCM)
-                logger.debug("GPIO riconfigurato per clear_display")
+                GPIO.setwarnings(False)
+                GPIO.setup(self.gpio_config['TFT_CS'], GPIO.OUT)
+                GPIO.setup(self.gpio_config['TFT_DC'], GPIO.OUT)
+                GPIO.setup(self.gpio_config['TFT_RST'], GPIO.OUT)
+                GPIO.setup(self.gpio_config['TFT_BL'], GPIO.OUT)
+                logger.debug("GPIO completamente riconfigurato per clear_display")
+            except Exception as gpio_error:
+                logger.error(f"Errore riconfigurazione GPIO: {gpio_error}")
+            
+    def reset_display(self):
+        """Reset completo del display in caso di problemi gravi"""
+        try:
+            logger.warning("🔄 Reset completo del display")
+            
+            # Pulisci il display
+            self.clear_display()
+            time.sleep(0.5)
+            
+            # Mostra schermata di reset
+            with canvas(self.device) as draw:
+                # Sfondo rosso per indicare reset
+                draw.rectangle(
+                    (0, 0, self.config['width'], self.config['height']),
+                    fill=self.colors['red']
+                )
+                
+                # Testo reset
+                draw.text(
+                    (10, 50),
+                    "RESET",
+                    font=self.fonts_sm['large'],
+                    fill=self.colors['white']
+                )
+                
+                draw.text(
+                    (10, 100),
+                    "Display",
+                    font=self.fonts_sm['medium'],
+                    fill=self.colors['white']
+                )
+            
+            time.sleep(2)
+            
+            # Torna alla schermata idle
+            self.show_idle_screen()
+            
+            logger.info("✅ Reset display completato")
+            
+        except Exception as e:
+            logger.error(f"❌ Errore durante reset display: {e}")
+            # Ultimo tentativo: solo pulizia
+            try:
+                self.clear_display()
             except:
                 pass
     
@@ -316,11 +419,6 @@ class MicroNavDisplayController:
             return
         
         try:
-            # Pulisci lo schermo prima di mostrare la schermata idle
-            logger.debug("Pulizia schermo prima di schermata idle")
-            self.clear_display()
-            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
-            
             logger.debug("Mostrando schermata idle")
             
             with canvas(self.device) as draw:
@@ -355,7 +453,7 @@ class MicroNavDisplayController:
                 draw.text(
                     (self.config['width'] // 2 - 60, 140),
                     "In attesa...",
-                    font=self.fonts_sm['medium'],
+                    font=self.fonts_sys['medium'],
                     fill=self.colors['gray']
                 )
                 
@@ -368,6 +466,8 @@ class MicroNavDisplayController:
             
             self.display_state['current_screen'] = 'idle'
             self.display_state['last_update'] = datetime.now()
+
+            time.sleep(3)
             
         except Exception as e:
             logger.error(f"Errore schermata idle: {e}")
@@ -382,7 +482,7 @@ class MicroNavDisplayController:
             # Pulisci lo schermo prima di mostrare l'istruzione
             logger.debug("Pulizia schermo prima di istruzione")
             self.clear_display()
-            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
+            time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
             
             logger.debug(f"Inizio visualizzazione istruzione: {instruction_data.get('instruction', '')[:30]}...")
             instruction = instruction_data.get('instruction', '')
@@ -413,7 +513,7 @@ class MicroNavDisplayController:
                     instruction,
                     (10, 70),
                     (self.config['width'] / 2) - 10,
-                    self.fonts_sm['medium'],
+                    self.fonts_sys['medium'],
                     self.colors['white']
                 )
                 
@@ -428,21 +528,6 @@ class MicroNavDisplayController:
                         distance_text,
                         font=self.fonts_sys['large'],
                         fill=self.colors['white']
-                    )
-                
-                # Durata
-                if duration > 0:
-                    duration_text = f"{duration}s"
-                    if duration >= 60:
-                        minutes = duration // 60
-                        seconds = duration % 60
-                        duration_text = f"{minutes}m {seconds}s"
-                    
-                    draw.text(
-                        (10, 150),
-                        duration_text,
-                        font=self.fonts_sm['medium'],
-                        fill=self.colors['light_gray']
                     )
                 
                 # Indicatori di stato
@@ -472,7 +557,7 @@ class MicroNavDisplayController:
             # Pulisci lo schermo prima di mostrare la panoramica
             logger.debug("Pulizia schermo prima di panoramica")
             self.clear_display()
-            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
+            time.sleep(0.3)  # Piccola pausa per assicurarsi che la pulizia sia completata
             origin = route_data.get('origin', '')
             destination = route_data.get('destination', '')
             total_distance = route_data.get('totalDistance', 0)
@@ -506,32 +591,36 @@ class MicroNavDisplayController:
                 draw.text(
                     (10, 35),
                     "Da:",
-                    font=self.fonts_sm['small'],
-                    fill=self.colors['gray']
+                    font=self.fonts_sys['medium'],
+                    fill=self.colors['light_gray']
                 )
                 # Tronca l'origine se troppo lunga
-                origin_short = origin[:40] + "..." if len(origin) > 40 else origin
-                draw.text(
-                    (10, 50),
+                origin_short = origin[:50] + "..." if len(origin) > 50 else origin
+                self._draw_wrapped_text(
+                    draw,
                     origin_short,
-                    font=self.fonts_sm['small'],
-                    fill=self.colors['white']
+                    (10, 50),
+                    self.config['width'] - 20,
+                    self.fonts_sys['medium'],
+                    self.colors['white']
                 )
                 
                 # Destinazione
                 draw.text(
                     (10, 90),
                     "A:",
-                    font=self.fonts_sm['small'],
-                    fill=self.colors['gray']
+                    font=self.fonts_sys['medium'],
+                    fill=self.colors['light_gray']
                 )
                 # Tronca la destinazione se troppo lunga
-                destination_short = destination[:40] + "..." if len(destination) > 40 else destination
-                draw.text(
-                    (10, 105),
+                destination_short = destination[:50] + "..." if len(destination) > 50 else destination
+                self._draw_wrapped_text(
+                    draw,
                     destination_short,
-                    font=self.fonts_sm['small'],
-                    fill=self.colors['white']
+                    (10, 105),
+                    self.config['width'] - 20,
+                    self.fonts_sys['medium'],
+                    self.colors['white']
                 )
                 
                 # Distanza totale
@@ -542,9 +631,9 @@ class MicroNavDisplayController:
                     
                     draw.text(
                         (10, 160),
-                        f"Distanza: {distance_text}",
-                        font=self.fonts_sm['medium'],
-                        fill=self.colors['yellow']
+                        f"{distance_text}",
+                        font=self.fonts_sys['large'],
+                        fill=self.colors['white']
                     )
                 
                 # Durata totale
@@ -553,21 +642,17 @@ class MicroNavDisplayController:
                     if total_duration >= 60:
                         minutes = total_duration // 60
                         duration_text = f"{minutes}m"
+                    if total_duration >= 3600:
+                        hours = total_duration // 3600
+                        minutes = (total_duration % 3600) // 60
+                        duration_text = f"{hours}h {minutes}m"
                     
                     draw.text(
-                        (10, 180),
-                        f"Durata: {duration_text}",
-                        font=self.fonts_sm['medium'],
+                        (self.config['width'] - 10 - draw.textlength(f"{duration_text}", font=self.fonts_sys['medium']), 160),
+                        f"{duration_text}",
+                        font=self.fonts_sys['medium'],
                         fill=self.colors['light_gray']
                     )
-                
-                # Numero istruzioni
-                draw.text(
-                    (10, 200),
-                    f"Istruzioni: {len(steps)}",
-                    font=self.fonts_sm['small'],
-                    fill=self.colors['gray']
-                )
             
             self.current_route = route_data
             self.display_state['current_screen'] = 'route_overview'
@@ -577,49 +662,6 @@ class MicroNavDisplayController:
             
         except Exception as e:
             logger.error(f"Errore visualizzazione panoramica: {e}")
-    
-    def show_error_screen(self, error_message: str):
-        """Mostra schermata di errore"""
-        if not self.is_initialized:
-            return
-        
-        try:
-            # Pulisci lo schermo prima di mostrare la schermata di errore
-            logger.debug("Pulizia schermo prima di schermata errore")
-            self.clear_display()
-            time.sleep(0.3)  # Pausa per assicurarsi che la pulizia sia completata
-            with canvas(self.device) as draw:
-                # Sfondo rosso
-                draw.rectangle(
-                    (0, 0, self.config['width'], self.config['height']),
-                    fill=self.colors['red']
-                )
-                
-                # Testo errore
-                draw.text(
-                    (10, 50),
-                    "ERRORE",
-                    font=self.fonts_sm['large'],
-                    fill=self.colors['white']
-                )
-                
-                # Messaggio errore
-                self._draw_wrapped_text(
-                    draw,
-                    error_message,
-                    (10, 100),
-                    self.config['width'] - 20,
-                    self.fonts_sm['medium'],
-                    self.colors['white']
-                )
-            
-            self.display_state['current_screen'] = 'error'
-            self.display_state['last_update'] = datetime.now()
-            
-            logger.error(f"Schermata errore visualizzata: {error_message}")
-            
-        except Exception as e:
-            logger.error(f"Errore visualizzazione schermata errore: {e}")
     
     def _draw_wrapped_text(self, draw, text: str, position: Tuple[int, int], 
                           max_width: int, font, color):
@@ -632,8 +674,8 @@ class MicroNavDisplayController:
             
             # Limita la lunghezza del testo per evitare overflow
             max_chars = 35  # Limite caratteri per riga (ridotto per display piccolo)
-            if len(text) > max_chars * 2:  # Se troppo lungo, tronca (max 2 righe)
-                text = text[:max_chars * 2] + "..."
+            if len(text) > max_chars * 4:  # Se troppo lungo, tronca (max 2 righe)
+                text = text[:max_chars * 4] + "..."
                 words = text.split(' ')
             
             for word in words:
@@ -657,10 +699,10 @@ class MicroNavDisplayController:
                 lines.append(' '.join(current_line))
             
             # Limita a 2 righe per evitare overflow verticale
-            for i, line in enumerate(lines[:2]):
+            for i, line in enumerate(lines[:4]):
                 draw.text((x, y), line, font=font, fill=color)
-                y += 16  # Spaziatura tra righe ottimizzata per display piccolo
-            if len(lines) > 2:
+                y += 20  # Spaziatura tra righe ottimizzata per display piccolo
+            if len(lines) > 4:
                 draw.text((x, y), "...", font=font, fill=color)
             
         except Exception as e:
@@ -857,24 +899,16 @@ class MicroNavDisplayController:
             # Anche se la schermata idle fallisce, il display è inizializzato
             return True
     
-    def get_display_status(self) -> Dict[str, Any]:
-        """Restituisce lo stato del display"""
-        return {
-            'initialized': self.is_initialized,
-            'running': self.running,
-            'current_screen': self.display_state.get('current_screen', 'unknown'),
-            'brightness': self.display_state.get('brightness', 0),
-            'last_update': self.display_state.get('last_update'),
-            'backlight_on': self._is_backlight_on()
-        }
-    
-    def _is_backlight_on(self) -> bool:
-        """Verifica se il backlight è acceso"""
-        try:
-            return GPIO.input(self.gpio_config['TFT_BL']) == GPIO.HIGH
-        except:
+    def update_font_sizes(self):
+        """Metodo pubblico per aggiornare le dimensioni dei font"""
+        if self.is_initialized:
+            logger.info("📝 Aggiornamento dimensioni font richiesto")
+            return self.reload_config_and_fonts()
+        else:
+            logger.warning("⚠️ Display non inizializzato, impossibile aggiornare font")
             return False
-    
+
+
     def _ensure_backlight_on(self):
         """Forza il backlight acceso e lo mantiene acceso"""
         try:
