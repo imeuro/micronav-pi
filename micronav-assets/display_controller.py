@@ -40,6 +40,9 @@ class MicroNavDisplayController:
         self.display_thread = None
         self.running = False
         
+        # Buffer per aggiornamenti parziali
+        self.current_display_image = None
+        
         # Configurazione
         self._load_config()
 
@@ -352,6 +355,10 @@ class MicroNavDisplayController:
                     (0, 0, self.config['width'], self.config['height']),
                     fill=self.colors['black']
                 )
+            
+            # Reset del buffer quando si pulisce lo schermo
+            self.current_display_image = None
+            
         except Exception as e:
             logger.error(f"Errore pulizia display: {e}")
             # Se c'è un errore, prova a riconfigurare GPIO
@@ -413,6 +420,51 @@ class MicroNavDisplayController:
             except:
                 pass
     
+    def _draw_idle_content(self, draw):
+        """Disegna il contenuto della schermata idle"""
+        try:
+            import os
+            logo_path = '/home/micronav/micronav-pi/micronav-assets/micronav.png'
+
+            # Sfondo nero
+            draw.rectangle(
+                (0, 0, self.config['width'], self.config['height']),
+                fill=self.colors['black']
+            )
+
+            if os.path.exists(logo_path):
+                logger.debug(f"Caricamento immagine: {logo_path}")
+                
+                # Carica l'immagine
+                with Image.open(logo_path) as logo_image:
+                    draw._image.paste(logo_image, (0, 0))
+            else:
+                 
+                # Logo/titolo
+                draw.text(
+                    (self.config['width'] // 2 - 80, 90),
+                    "MicroNav",
+                    font=self.fonts_sys['large'],
+                    fill=self.colors['white']
+                )
+                
+            
+            # Status
+            draw.text(
+                (self.config['width'] // 2 - 70, 140),
+                "attesa connessione...",
+                font=self.fonts_sys['medium'],
+                fill=self.colors['gray']
+            )
+            
+            # Indicatori di stato
+            self._draw_wifi_indicator(draw, True)
+            self._draw_mqtt_indicator(draw, False)
+            self._draw_gps_indicator(draw, False)
+            
+        except Exception as e:
+            logger.error(f"Errore disegno contenuto idle: {e}")
+
     def show_idle_screen(self):
         """Mostra schermata di attesa"""
         if not self.is_initialized:
@@ -422,56 +474,182 @@ class MicroNavDisplayController:
             logger.debug("Mostrando schermata idle")
             
             with canvas(self.device) as draw:
-                import os
-                logo_path = '/home/micronav/micronav-assets/micronav.png'
-
-
-                # Sfondo nero
-                draw.rectangle(
-                    (0, 0, self.config['width'], self.config['height']),
-                    fill=self.colors['black']
-                )
-
-                if os.path.exists(logo_path):
-                    logger.debug(f"Caricamento immagine: {logo_path}")
-                    
-                    # Carica l'immagine
-                    with Image.open(logo_path) as logo_image:
-                        draw._image.paste(logo_image, (0, 0))
-                else:
-                     
-                    # Logo/titolo
-                    draw.text(
-                        (self.config['width'] // 2 - 70, 90),
-                        "MicroNav",
-                        font=self.fonts_sys['large'],
-                        fill=self.colors['white']
-                    )
-                    
-                
-                # Status
-                draw.text(
-                    (self.config['width'] // 2 - 60, 140),
-                    "In attesa...",
-                    font=self.fonts_sys['medium'],
-                    fill=self.colors['gray']
-                )
-                
-                # Indicatore WiFi
-                self._draw_wifi_indicator(draw, True)
-                # Indicatore MQTT
-                self._draw_mqtt_indicator(draw, True)
-                # Indicatore GPS
-                self._draw_gps_indicator(draw, False)
+                self._draw_idle_content(draw)
+            
+            # Salva l'immagine corrente per aggiornamenti parziali
+            self._save_current_display()
             
             self.display_state['current_screen'] = 'idle'
             self.display_state['last_update'] = datetime.now()
 
-            time.sleep(3)
+            #time.sleep(3)
             
         except Exception as e:
             logger.error(f"Errore schermata idle: {e}")
     
+    def _draw_navigation_content(self, draw, instruction_data: Dict[str, Any] = None):
+        """Disegna il contenuto della schermata di navigazione"""
+        try:
+            # Usa i dati correnti se non forniti
+            if instruction_data is None:
+                instruction_data = self.current_instruction or {}
+            
+            instruction = instruction_data.get('instruction', '')
+            distance = instruction_data.get('distance', 0)
+            duration = instruction_data.get('duration', 0)
+            maneuver = instruction_data.get('maneuver', {})
+            icon = instruction_data.get('icon', '')
+            
+            # Sfondo
+            draw.rectangle(
+                (0, 0, self.config['width'], self.config['height']),
+                fill=self.colors['black']
+            )
+            
+            # Icona manovra (se disponibile)
+            if maneuver:
+                # Costruisce e logga il path dell'icona PNG
+                icon_path = self._get_icon_path(instruction_data)
+                logger.debug(f"Path icona PNG: {icon_path}")
+                
+                # Carica e visualizza l'icona PNG
+                self._draw_maneuver_icon(draw, icon_path, 180, 65)
+            
+            # Istruzione principale
+            self._draw_wrapped_text(
+                draw,
+                instruction,
+                (10, 70),
+                (self.config['width'] / 2) - 10,
+                self.fonts_sys['medium'],
+                self.colors['white']
+            )
+            
+            # Distanza
+            if distance > 0:
+                distance_text = f"{distance}m"
+                if distance >= 1000:
+                    distance_text = f"{distance/1000:.1f}km"
+                
+                draw.text(
+                    (10, 160),
+                    distance_text,
+                    font=self.fonts_sys['large'],
+                    fill=self.colors['white']
+                )
+            
+            # Indicatori di stato
+            self._draw_wifi_indicator(draw, True)
+            self._draw_mqtt_indicator(draw, True)
+            self._draw_gps_indicator(draw, False)
+            
+        except Exception as e:
+            logger.error(f"Errore disegno contenuto navigazione: {e}")
+
+    def _draw_route_overview_content(self, draw, route_data: Dict[str, Any] = None):
+        """Disegna il contenuto della schermata panoramica percorso"""
+        try:
+            # Usa i dati correnti se non forniti
+            if route_data is None:
+                route_data = self.current_route or {}
+            
+            origin = route_data.get('origin', '')
+            destination = route_data.get('destination', '')
+            total_distance = route_data.get('totalDistance', 0)
+            total_duration = route_data.get('totalDuration', 0)
+            steps = route_data.get('steps', [])
+            
+            # Verifica che i font siano caricati
+            if not self.fonts_sm['small'] or not self.fonts_sm['large']:
+                logger.warning("Font non caricati correttamente, uso font predefinito")
+                self.fonts_sm['small'] = ImageFont.load_default()
+                self.fonts_sm['large'] = ImageFont.load_default()
+            
+            # Sfondo
+            draw.rectangle(
+                (0, 0, self.config['width'], self.config['height']),
+                fill=self.colors['black']
+            )
+            
+            # Titolo
+            draw.text(
+                (10, 5),
+                "Percorso",
+                font=self.fonts_sm['large'],
+                fill=self.colors['white']
+            )
+            
+            # Origine
+            draw.text(
+                (10, 35),
+                "Da:",
+                font=self.fonts_sys['medium'],
+                fill=self.colors['light_gray']
+            )
+            # Tronca l'origine se troppo lunga
+            origin_short = origin[:50] + "..." if len(origin) > 50 else origin
+            self._draw_wrapped_text(
+                draw,
+                origin_short,
+                (10, 50),
+                self.config['width'] - 20,
+                self.fonts_sys['medium'],
+                self.colors['white']
+            )
+            
+            # Destinazione
+            draw.text(
+                (10, 90),
+                "A:",
+                font=self.fonts_sys['medium'],
+                fill=self.colors['light_gray']
+            )
+            # Tronca la destinazione se troppo lunga
+            destination_short = destination[:50] + "..." if len(destination) > 50 else destination
+            self._draw_wrapped_text(
+                draw,
+                destination_short,
+                (10, 105),
+                self.config['width'] - 20,
+                self.fonts_sys['medium'],
+                self.colors['white']
+            )
+            
+            # Distanza totale
+            if total_distance > 0:
+                distance_text = f"{total_distance}m"
+                if total_distance >= 1000:
+                    distance_text = f"{total_distance/1000:.1f}km"
+                
+                draw.text(
+                    (10, 160),
+                    f"{distance_text}",
+                    font=self.fonts_sys['large'],
+                    fill=self.colors['white']
+                )
+            
+            # Durata totale
+            if total_duration > 0:
+                duration_text = f"{total_duration}s"
+                if total_duration >= 60:
+                    minutes = total_duration // 60
+                    duration_text = f"{minutes}m"
+                if total_duration >= 3600:
+                    hours = total_duration // 3600
+                    minutes = (total_duration % 3600) // 60
+                    duration_text = f"{hours}h {minutes}m"
+                
+                draw.text(
+                    (self.config['width'] - 10 - draw.textlength(f"{duration_text}", font=self.fonts_sys['large']), 160),
+                    f"{duration_text}",
+                    font=self.fonts_sys['large'],
+                    fill=self.colors['light_gray']
+                )
+            
+        except Exception as e:
+            logger.error(f"Errore disegno contenuto panoramica: {e}")
+
+
     def show_navigation_instruction(self, instruction_data: Dict[str, Any]):
         """Mostra istruzione di navigazione"""
         if not self.is_initialized:
@@ -485,61 +663,18 @@ class MicroNavDisplayController:
             time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
             
             logger.debug(f"Inizio visualizzazione istruzione: {instruction_data.get('instruction', '')[:30]}...")
-            instruction = instruction_data.get('instruction', '')
-            distance = instruction_data.get('distance', 0)
-            duration = instruction_data.get('duration', 0)
-            maneuver = instruction_data.get('maneuver', {})
-            icon = instruction_data.get('icon', '')
             
             with canvas(self.device) as draw:
-                # Sfondo
-                draw.rectangle(
-                    (0, 0, self.config['width'], self.config['height']),
-                    fill=self.colors['black']
-                )
-                
-                # Icona manovra (se disponibile)
-                if maneuver:
-                    # Costruisce e logga il path dell'icona PNG
-                    icon_path = self._get_icon_path(instruction_data)
-                    logger.debug(f"Path icona PNG: {icon_path}")
-                    
-                    # Carica e visualizza l'icona PNG
-                    self._draw_maneuver_icon(draw, icon_path, 180, 65)
-                
-                # Istruzione principale
-                self._draw_wrapped_text(
-                    draw,
-                    instruction,
-                    (10, 70),
-                    (self.config['width'] / 2) - 10,
-                    self.fonts_sys['medium'],
-                    self.colors['white']
-                )
-                
-                # Distanza
-                if distance > 0:
-                    distance_text = f"{distance}m"
-                    if distance >= 1000:
-                        distance_text = f"{distance/1000:.1f}km"
-                    
-                    draw.text(
-                        (10, 160),
-                        distance_text,
-                        font=self.fonts_sys['large'],
-                        fill=self.colors['white']
-                    )
-                
-                # Indicatori di stato
-                self._draw_wifi_indicator(draw, True)
-                self._draw_mqtt_indicator(draw, True)
-                self._draw_gps_indicator(draw, False)
+                self._draw_navigation_content(draw, instruction_data)
+            
+            # Salva l'immagine corrente per aggiornamenti parziali
+            self._save_current_display()
             
             self.current_instruction = instruction_data
             self.display_state['current_screen'] = 'navigation'
             self.display_state['last_update'] = datetime.now()
             
-            logger.info(f"✅ Istruzione visualizzata correttamente: {instruction[:30]}...")
+            logger.info(f"✅ Istruzione visualizzata correttamente: {instruction_data.get('instruction', '')[:30]}...")
             
         except Exception as e:
             logger.error(f"❌ Errore visualizzazione istruzione: {e}")
@@ -558,101 +693,16 @@ class MicroNavDisplayController:
             logger.debug("Pulizia schermo prima di panoramica")
             self.clear_display()
             time.sleep(0.3)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            
             origin = route_data.get('origin', '')
             destination = route_data.get('destination', '')
-            total_distance = route_data.get('totalDistance', 0)
-            total_duration = route_data.get('totalDuration', 0)
-            steps = route_data.get('steps', [])
-            
             logger.debug(f"Mostrando panoramica: origine='{origin[:50]}...', destinazione='{destination[:50]}...'")
             
-            # Verifica che i font siano caricati
-            if not self.fonts_sm['small'] or not self.fonts_sm['large']:
-                logger.warning("Font non caricati correttamente, uso font predefinito")
-                self.fonts_sm['small'] = ImageFont.load_default()
-                self.fonts_sm['large'] = ImageFont.load_default()
-            
             with canvas(self.device) as draw:
-                # Sfondo
-                draw.rectangle(
-                    (0, 0, self.config['width'], self.config['height']),
-                    fill=self.colors['black']
-                )
-                
-                # Titolo
-                draw.text(
-                    (10, 5),
-                    "Percorso",
-                    font=self.fonts_sm['large'],
-                    fill=self.colors['white']
-                )
-                
-                # Origine
-                draw.text(
-                    (10, 35),
-                    "Da:",
-                    font=self.fonts_sys['medium'],
-                    fill=self.colors['light_gray']
-                )
-                # Tronca l'origine se troppo lunga
-                origin_short = origin[:50] + "..." if len(origin) > 50 else origin
-                self._draw_wrapped_text(
-                    draw,
-                    origin_short,
-                    (10, 50),
-                    self.config['width'] - 20,
-                    self.fonts_sys['medium'],
-                    self.colors['white']
-                )
-                
-                # Destinazione
-                draw.text(
-                    (10, 90),
-                    "A:",
-                    font=self.fonts_sys['medium'],
-                    fill=self.colors['light_gray']
-                )
-                # Tronca la destinazione se troppo lunga
-                destination_short = destination[:50] + "..." if len(destination) > 50 else destination
-                self._draw_wrapped_text(
-                    draw,
-                    destination_short,
-                    (10, 105),
-                    self.config['width'] - 20,
-                    self.fonts_sys['medium'],
-                    self.colors['white']
-                )
-                
-                # Distanza totale
-                if total_distance > 0:
-                    distance_text = f"{total_distance}m"
-                    if total_distance >= 1000:
-                        distance_text = f"{total_distance/1000:.1f}km"
-                    
-                    draw.text(
-                        (10, 160),
-                        f"{distance_text}",
-                        font=self.fonts_sys['large'],
-                        fill=self.colors['white']
-                    )
-                
-                # Durata totale
-                if total_duration > 0:
-                    duration_text = f"{total_duration}s"
-                    if total_duration >= 60:
-                        minutes = total_duration // 60
-                        duration_text = f"{minutes}m"
-                    if total_duration >= 3600:
-                        hours = total_duration // 3600
-                        minutes = (total_duration % 3600) // 60
-                        duration_text = f"{hours}h {minutes}m"
-                    
-                    draw.text(
-                        (self.config['width'] - 10 - draw.textlength(f"{duration_text}", font=self.fonts_sys['medium']), 160),
-                        f"{duration_text}",
-                        font=self.fonts_sys['medium'],
-                        fill=self.colors['light_gray']
-                    )
+                self._draw_route_overview_content(draw, route_data)
+            
+            # Salva l'immagine corrente per aggiornamenti parziali
+            self._save_current_display()
             
             self.current_route = route_data
             self.display_state['current_screen'] = 'route_overview'
@@ -837,6 +887,93 @@ class MicroNavDisplayController:
         except Exception as e:
             logger.error(f"Errore indicatore MQTT: {e}")
     
+    def _save_current_display(self):
+        """Salva l'immagine corrente del display nel buffer"""
+        try:
+            # Crea un'immagine temporanea per catturare il contenuto corrente
+            temp_image = Image.new('RGB', (self.config['width'], self.config['height']), self.colors['black'])
+            temp_draw = ImageDraw.Draw(temp_image)
+            
+            # Ridisegna il contenuto corrente basandosi sullo stato
+            if self.display_state['current_screen'] == 'idle':
+                self._draw_idle_content(temp_draw)
+            elif self.display_state['current_screen'] == 'navigation':
+                self._draw_navigation_content(temp_draw)
+            elif self.display_state['current_screen'] == 'route_overview':
+                self._draw_route_overview_content(temp_draw)
+            
+            # Salva l'immagine nel buffer
+            self.current_display_image = temp_image
+            return True
+        except Exception as e:
+            logger.error(f"Errore salvataggio display corrente: {e}")
+            return False
+    
+    def _update_display_from_buffer(self):
+        """Aggiorna il display fisico con l'immagine dal buffer"""
+        try:
+            if self.current_display_image is not None:
+                self.device.display(self.current_display_image)
+                return True
+        except Exception as e:
+            logger.error(f"Errore aggiornamento display da buffer: {e}")
+        return False
+    
+    def update_mqtt_status(self, connected: bool):
+        """Aggiorna solo l'indicatore MQTT senza ridisegnare tutto lo schermo"""
+        if not self.is_initialized:
+            return
+        
+        try:
+            # Se non abbiamo un'immagine corrente, ridisegna tutto
+            if self.current_display_image is None:
+                logger.debug("Nessuna immagine corrente, ridisegno completo")
+                with canvas(self.device) as draw:
+                    # Ridisegna tutto lo schermo basandosi sullo stato corrente
+                    if self.display_state['current_screen'] == 'idle':
+                        self._draw_idle_content(draw)
+                    elif self.display_state['current_screen'] == 'navigation':
+                        self._draw_navigation_content(draw)
+                    elif self.display_state['current_screen'] == 'route_overview':
+                        self._draw_route_overview_content(draw)
+                    
+                    # Aggiorna l'indicatore MQTT
+                    self._draw_mqtt_indicator(draw, connected)
+                
+                # Salva l'immagine corrente
+                self._save_current_display()
+                return
+            
+            # Aggiornamento parziale: modifica solo l'area MQTT
+            logger.debug("Aggiornamento parziale indicatore MQTT")
+            
+            # Crea un canvas temporaneo per disegnare solo l'indicatore MQTT
+            temp_image = self.current_display_image.copy()
+            temp_draw = ImageDraw.Draw(temp_image)
+            
+            # Disegna solo l'indicatore MQTT sull'immagine esistente
+            self._draw_mqtt_indicator(temp_draw, connected)
+            
+            # Aggiorna il buffer e il display
+            self.current_display_image = temp_image
+            self._update_display_from_buffer()
+                
+        except Exception as e:
+            logger.error(f"Errore aggiornamento status MQTT: {e}")
+            # Fallback: ridisegna tutto
+            try:
+                with canvas(self.device) as draw:
+                    if self.display_state['current_screen'] == 'idle':
+                        self._draw_idle_content(draw)
+                    elif self.display_state['current_screen'] == 'navigation':
+                        self._draw_navigation_content(draw)
+                    elif self.display_state['current_screen'] == 'route_overview':
+                        self._draw_route_overview_content(draw)
+                    self._draw_mqtt_indicator(draw, connected)
+                self._save_current_display()
+            except Exception as fallback_error:
+                logger.error(f"Errore anche nel fallback: {fallback_error}")
+    
     def _draw_gps_indicator(self, draw, connected: bool):
         """Disegna indicatore GPS"""
         try:
@@ -935,6 +1072,35 @@ class MicroNavDisplayController:
             logger.error(f"❌ Errore spegnimento backlight: {e}")
     
     
+    def test_partial_update(self):
+        """Test del sistema di aggiornamento parziale"""
+        if not self.is_initialized:
+            logger.error("Display non inizializzato per test")
+            return False
+        
+        try:
+            logger.info("🧪 Test aggiornamento parziale MQTT...")
+            
+            # Mostra schermata idle
+            self.show_idle_screen()
+            time.sleep(1)
+            
+            # Test aggiornamento MQTT (dovrebbe essere parziale)
+            logger.info("Test MQTT disconnesso...")
+            self.update_mqtt_status(False)
+            time.sleep(2)
+            
+            logger.info("Test MQTT connesso...")
+            self.update_mqtt_status(True)
+            time.sleep(2)
+            
+            logger.info("✅ Test aggiornamento parziale completato")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Errore test aggiornamento parziale: {e}")
+            return False
+
     def stop(self):
         """Ferma il controller display"""
         self.running = False
@@ -1033,6 +1199,9 @@ if __name__ == "__main__":
             
             # Torna a idle
             display.show_idle_screen()
+            
+            # Test aggiornamento parziale
+            display.test_partial_update()
             
             # Loop principale
             while True:

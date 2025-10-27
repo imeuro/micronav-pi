@@ -8,6 +8,7 @@ import json
 import time
 import logging
 import threading
+import socket
 from typing import Dict, Callable, Optional, Any
 from datetime import datetime
 
@@ -20,14 +21,13 @@ except ImportError:
 from config import get_topics_config
 
 # Configurazione logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 class MicroNavMQTTClient:
     """Client MQTT per MicroNav"""
+    
+    # Variabile di classe per tracciare le istanze
+    _instances = []
     
     def __init__(self, config: Dict[str, Any]):
         """
@@ -36,6 +36,20 @@ class MicroNavMQTTClient:
         Args:
             config: Configurazione MQTT
         """
+        # Traccia le chiamate al costruttore
+        import traceback
+        stack = traceback.format_stack()
+        logger.warning(f"🔍 Costruttore MQTT chiamato da: {stack[-2].strip()}")
+        
+        # Controlla se esiste già un'istanza
+        if len(self._instances) > 0:
+            logger.error(f"❌ Tentativo di creare istanza MQTT multipla! Esistono già {len(self._instances)} istanze")
+            logger.error(f"❌ Istanza esistente: {self._instances[0]}")
+            # Non creare una nuova istanza, usa quella esistente
+            existing = self._instances[0]
+            self.__dict__.update(existing.__dict__)
+            return
+        
         self.config = config
         self.client = None
         self.is_connected = False
@@ -44,8 +58,16 @@ class MicroNavMQTTClient:
         self.reconnect_delay = 5  # secondi
         
         # Carica configurazione topic
-        device_id = config.get('device_id', 'car01')
+        device_id = config.get('device_id', 'vehicle-001')
         self.topics = get_topics_config(device_id)
+        
+        # Statistiche sistema (aggiornate dal sistema principale)
+        self.system_stats = {
+            'gps_fix': False,
+            'gps_connected': False,
+            'wifi_connected': False,
+            'mqtt_connected': False
+        }
         
         # Callback per gestire i messaggi ricevuti
         self.message_handlers = {}
@@ -63,7 +85,26 @@ class MicroNavMQTTClient:
             'last_connection_time': None
         }
         
-        logger.info("Client MQTT MicroNav inizializzato")
+        # Aggiungi questa istanza alla lista
+        self._instances.append(self)
+        
+        logger.info(f"Client MQTT MicroNav inizializzato (ID: {id(self)}) - Istanza {len(self._instances)}")
+    
+    def update_system_stats(self, stats: Dict[str, Any]):
+        """Aggiorna le statistiche del sistema"""
+        self.system_stats.update(stats)
+    
+    @classmethod
+    def get_instance(cls):
+        """Restituisce l'istanza singleton se esiste"""
+        if len(cls._instances) > 0:
+            return cls._instances[0]
+        return None
+    
+    @classmethod
+    def clear_instances(cls):
+        """Pulisce tutte le istanze (per test)"""
+        cls._instances.clear()
     
     def setup_client(self):
         """Configura il client MQTT"""
@@ -91,16 +132,16 @@ class MicroNavMQTTClient:
             will_payload = json.dumps({
                 'status': 'offline',
                 'timestamp': int(time.time()),
-                'message': 'Raspberry Pi disconnesso'
+                'message': 'Raspberry Pi disconnesso',
+                'ip': {
+                    'ip': 'N/A',
+                    'timestamp': int(time.time())
+                }
             })
-            
-            self.client.will_set(
-                will_topic, 
-                will_payload, 
-                qos=1, 
-                retain=True
-            )
-            
+
+            self.client.will_set(will_topic, will_payload, qos=1, retain=True)
+
+
             logger.info("Client MQTT configurato")
             return True
             
@@ -157,6 +198,19 @@ class MicroNavMQTTClient:
                 })
                 
                 self.client.publish(disconnect_topic, disconnect_payload, qos=1, retain=True)
+
+                connections_topic = self.topics['publish']['connections']
+                connections_payload = json.dumps({
+                    'wifi': False,
+                    'mqtt': False,
+                    'gps': False,
+                    'gps_has_fix': False,
+                    'timestamp': int(time.time()),
+                    'device_id': self.topics['device_id'],
+                    'device_ip_addr': "N/A"
+                })
+                
+                self.client.publish(connections_topic, connections_payload, qos=1, retain=True)
                 
                 # Disconnetti
                 self.client.loop_stop()
@@ -186,9 +240,7 @@ class MicroNavMQTTClient:
         try:
             for topic in topics:
                 result = self.client.subscribe(topic, qos=1)
-                if result[0] == mqtt.MQTT_ERR_SUCCESS:
-                    logger.info(f"✅ Sottoscritto a: {topic}")
-                else:
+                if result[0] != mqtt.MQTT_ERR_SUCCESS:
                     logger.error(f"❌ Errore sottoscrizione a: {topic}")
             
             return True
@@ -196,20 +248,36 @@ class MicroNavMQTTClient:
         except Exception as e:
             logger.error(f"Errore sottoscrizione topic: {e}")
             return False
-    
-    def publish_status(self, status: str, message: str = "", extra_data: Dict = None):
+    import socket
+
+    def show_ip_addr(self) -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("8.8.8.8", 80))
+                ip_address = s.getsockname()[0]
+            finally:
+                s.close()
+            # logger.debug(f"LAN IP Address: {ip_address}")
+            return ip_address
+        except Exception as e:
+            logger.error(f"Errore mostra IP: {e}")
+            return "N/A"
+
+
+
+    def publish_status(self, topic: str, status: str, message: str = "", extra_data: Dict = None):
         """Pubblica status del dispositivo"""
         if not self.is_connected:
             return False
-        
-        topic = self.topics['publish']['status']
+
         
         payload = {
             'status': status,
             'timestamp': int(time.time()),
             'message': message,
             'device_id': self.topics['device_id'],
-            'uptime': time.time() - self.stats.get('start_time', time.time())
+            'uptime': time.time() - self.stats.get('start_time', time.time()),
         }
         
         if extra_data:
@@ -221,7 +289,7 @@ class MicroNavMQTTClient:
             result = self.client.publish(topic, json.dumps(safe_payload), qos=1, retain=True)
             if result.rc == mqtt.MQTT_ERR_SUCCESS:
                 self.stats['messages_sent'] += 1
-                logger.info(f"Status pubblicato: {status}")
+                logger.debug(f"Status pubblicato: {status}")
                 return True
             else:
                 logger.error(f"Errore pubblicazione status: {result.rc}")
@@ -230,7 +298,43 @@ class MicroNavMQTTClient:
         except Exception as e:
             logger.error(f"Errore pubblicazione status: {e}")
             return False
-    
+
+    def _publish_connections_periodically(self, interval_seconds: int = 60):
+        """Pubblica periodicamente lo stato delle connessioni su topic dedicato"""
+        try:
+            topic = self.topics['publish'].get('connections')
+        except Exception:
+            topic = None
+        if not topic:
+            logger.warning("Topic connections non configurato")
+            return
+        
+        logger.info(f"🔄 Avvio pubblicazione periodica connessioni ogni {interval_seconds}s su {topic}")
+        
+        while self.running:
+            try:
+                ip_addr = self.show_ip_addr()
+                
+                payload = json.dumps({
+                    'wifi': self.system_stats.get('wifi_connected', False),
+                    'mqtt': self.is_connected,
+                    'gps': self.system_stats.get('gps_connected', False),
+                    'gps_has_fix': self.system_stats.get('gps_fix', False),
+                    'timestamp': int(time.time()),
+                    'device_id': self.topics['device_id'],
+                    'device_ip_addr': ip_addr
+                })
+                
+                if self.client and self.is_connected:
+                    self.client.publish(topic, payload, qos=1, retain=True)
+                    logger.debug(f"📡 Pubblicato stato connessioni: {payload}")
+                else:
+                    logger.debug("MQTT non connesso, salto pubblicazione connessioni")
+                    
+            except Exception as e:
+                logger.error(f"Errore pubblicazione connessioni periodico: {e}")
+            time.sleep(interval_seconds)
+
     def _make_json_safe(self, obj):
         """Converte oggetti non serializzabili in JSON in versioni sicure"""
         if isinstance(obj, dict):
@@ -271,7 +375,14 @@ class MicroNavMQTTClient:
             self.subscribe_to_topics()
             
             # Pubblica status online
-            self.publish_status("online", "Raspberry Pi connesso")
+            self.publish_status(self.topics['publish']['status'], "online", "Raspberry Pi connesso")
+
+            # Avvia pubblicazione periodica IP
+            try:
+                self.connections_thread = threading.Thread(target=self._publish_connections_periodically, args=(60,), daemon=True)
+                self.connections_thread.start()
+            except Exception as e:
+                logger.error(f"Impossibile avviare publisher IP periodico: {e}")
             
         else:
             logger.error(f"❌ Errore connessione MQTT: {rc}")
@@ -338,6 +449,11 @@ class MicroNavMQTTClient:
         
         if self.connect():
             logger.info("✅ Client MQTT avviato")
+            try:
+                current_ip = self.show_ip_addr()
+                print(f"IP locale: {current_ip}")
+            except Exception:
+                pass
             return True
         else:
             logger.error("❌ Errore avvio client MQTT")
@@ -347,6 +463,12 @@ class MicroNavMQTTClient:
         """Ferma il client MQTT"""
         logger.info("Arresto client MQTT...")
         self.disconnect()
+        
+        # Rimuovi questa istanza dalla lista
+        if self in self._instances:
+            self._instances.remove(self)
+            logger.info(f"🗑️  Istanza MQTT rimossa. Rimangono {len(self._instances)} istanze")
+        
         logger.info("✅ Client MQTT fermato")
     
     def get_stats(self) -> Dict:
@@ -355,64 +477,3 @@ class MicroNavMQTTClient:
         stats['is_connected'] = self.is_connected
         stats['reconnect_attempts'] = self.reconnect_attempts
         return stats
-
-# Esempio di utilizzo
-if __name__ == "__main__":
-    # Configurazione di esempio
-    config = {
-        'broker_host': 'tuoserver.it',  # Sostituisci con il tuo server
-        'broker_port': 1883,
-        'username': 'micronav',
-        'password': 'tuapassword',
-        'device_id': 'car01',
-        'keepalive': 60
-    }
-    
-    # Crea client MQTT
-    mqtt_client = MicroNavMQTTClient(config)
-    
-    # Handler per messaggi di percorso
-    def handle_route_data(topic, data):
-        print(f"📍 Percorso ricevuto: {data.get('origin')} → {data.get('destination')}")
-        print(f"   Distanza: {data.get('totalDistance', 0)}m")
-        print(f"   Durata: {data.get('totalDuration', 0)}s")
-        print(f"   Istruzioni: {len(data.get('steps', []))}")
-    
-    # Handler per istruzioni di navigazione
-    def handle_navigation_step(topic, data):
-        print(f"🧭 Istruzione: {data.get('instruction', 'N/A')}")
-        print(f"   Distanza: {data.get('distance', 0)}m")
-        print(f"   Durata: {data.get('duration', 0)}s")
-    
-    # Handler per comandi
-    def handle_commands(topic, data):
-        print(f"⚙️  Comando ricevuto: {data.get('command', 'N/A')}")
-    
-    # Registra handler
-    mqtt_client.register_message_handler("route/data", handle_route_data)
-    mqtt_client.register_message_handler("route/step", handle_navigation_step)
-    mqtt_client.register_message_handler("commands", handle_commands)
-    
-    try:
-        # Avvia client
-        if mqtt_client.start():
-            print("✅ Client MQTT avviato. Premi Ctrl+C per fermare.")
-            
-            # Loop principale
-            while True:
-                time.sleep(1)
-                
-                # Pubblica status ogni 30 secondi
-                if int(time.time()) % 30 == 0:
-                    mqtt_client.publish_status("online", "Raspberry Pi attivo")
-        else:
-            print("❌ Errore avvio client MQTT")
-    
-    except KeyboardInterrupt:
-        print("\n⏹️  Arresto client MQTT...")
-        mqtt_client.stop()
-        print("✅ Client MQTT fermato")
-    
-    except Exception as e:
-        print(f"❌ Errore: {e}")
-        mqtt_client.stop()

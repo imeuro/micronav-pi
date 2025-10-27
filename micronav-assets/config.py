@@ -71,12 +71,14 @@ def get_mqtt_topics(device_id: str = None) -> Dict[str, Any]:
             'route_data': f"{base_topic}/route/data",
             'route_step': f"{base_topic}/route/step", 
             'commands': f"{base_topic}/commands",
-            'gps_position': f"{base_topic}/gps/position"
+            'gps_position': f"{base_topic}/position"
         },
         'publish': {
             'status': f"{base_topic}/status",
+            'network_ip': f"{base_topic}/status/ip",
+            'connections': f"{base_topic}/status/connections",
             'display_current': f"{base_topic}/display/current",
-            'system_info': f"{base_topic}/system/info"
+            'gps_position': f"{base_topic}/position"
         }
     }
 
@@ -167,6 +169,19 @@ DIRECTIONS_ICONS_CONFIG = {
 }
 
 
+# Configurazione GPS L76K
+GPS_CONFIG = {
+    'port': '/dev/ttyS0',           # Porta seriale UART
+    'baudrate': 9600,              # Velocità trasmissione
+    'timeout': 1.0,                # Timeout lettura (secondi)
+    'fix_timeout': 45,             # Timeout per ottenere fix (secondi)
+    'update_rate': 1,              # Frequenza aggiornamento (Hz)
+    'enable_sbas': True,           # Abilita SBAS
+    'min_satellites': 4,           # Numero minimo satelliti per fix
+    'max_hdop': 5.0,               # HDOP massimo accettabile
+    'auto_configure': True         # Configurazione automatica al avvio
+}
+
 # Configurazione Logging
 LOGGING_CONFIG = {
     'level': 'INFO',
@@ -187,6 +202,7 @@ def get_config() -> Dict[str, Any]:
         'display': DISPLAY_CONFIG,
         'gpio': GPIO_CONFIG,
         'wifi': WIFI_CONFIG,
+        'gps': GPS_CONFIG,
         'topics': MQTT_TOPICS,
         'colors': COLORS,
         'fonts': FONT_CONFIG,
@@ -235,6 +251,10 @@ def get_directions_icons_config() -> Dict[str, Any]:
 def get_logging_config() -> Dict[str, Any]:
     """Restituisce la configurazione logging"""
     return LOGGING_CONFIG.copy()
+
+def get_gps_config() -> Dict[str, Any]:
+    """Restituisce la configurazione GPS"""
+    return GPS_CONFIG.copy()
 
 def validate_config() -> bool:
     """Valida la configurazione"""
@@ -289,6 +309,12 @@ def print_config_summary():
     print(f"\n📡 WiFi:")
     print(f"  Rete Casa: {WIFI_CONFIG['home_network']['ssid']}")
     print(f"  Rete Mobile: {WIFI_CONFIG['mobile_network']['ssid']}")
+    
+    print(f"\n🛰️  GPS:")
+    print(f"  Porta: {GPS_CONFIG['port']}")
+    print(f"  Baudrate: {GPS_CONFIG['baudrate']}")
+    print(f"  Timeout Fix: {GPS_CONFIG['fix_timeout']}s")
+    print(f"  Frequenza: {GPS_CONFIG['update_rate']}Hz")
     
     print(f"\n📁 Sistema:")
     print(f"  App: {SYSTEM_CONFIG['app_name']} v{SYSTEM_CONFIG['version']}")
