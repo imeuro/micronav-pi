@@ -356,8 +356,8 @@ class MicroNavDisplayController:
                     fill=self.colors['black']
                 )
             
-            # Reset del buffer quando si pulisce lo schermo
-            self.current_display_image = None
+            # Non resettare il buffer quando si pulisce lo schermo
+            # self.current_display_image = None
             
         except Exception as e:
             logger.error(f"Errore pulizia display: {e}")
@@ -426,6 +426,11 @@ class MicroNavDisplayController:
             import os
             logo_path = '/home/micronav/micronav-pi/micronav-assets/micronav.png'
 
+            # Pulisci lo schermo prima di mostrare l'istruzione
+            # logger.debug("Pulizia schermo prima di istruzione")
+            # self.clear_display()
+            # time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            
             # Sfondo nero
             draw.rectangle(
                 (0, 0, self.config['width'], self.config['height']),
@@ -458,9 +463,9 @@ class MicroNavDisplayController:
             )
             
             # Indicatori di stato
-            self._draw_wifi_indicator(draw, True)
-            self._draw_mqtt_indicator(draw, False)
-            self._draw_gps_indicator(draw, False)
+            # self._draw_wifi_indicator(draw, True)
+            # self._draw_mqtt_indicator(draw, False)
+            # self._draw_gps_indicator(draw, False, False)
             
         except Exception as e:
             logger.error(f"Errore disegno contenuto idle: {e}")
@@ -476,17 +481,22 @@ class MicroNavDisplayController:
             with canvas(self.device) as draw:
                 self._draw_idle_content(draw)
             
-            # Salva l'immagine corrente per aggiornamenti parziali
-            self._save_current_display()
+
             
             self.display_state['current_screen'] = 'idle'
             self.display_state['last_update'] = datetime.now()
 
             #time.sleep(3)
+            # Salva l'immagine corrente per aggiornamenti parziali
+            #self._save_current_display()
             
         except Exception as e:
             logger.error(f"Errore schermata idle: {e}")
-    
+
+
+
+### Schermate di navigazione
+
     def _draw_navigation_content(self, draw, instruction_data: Dict[str, Any] = None):
         """Disegna il contenuto della schermata di navigazione"""
         try:
@@ -537,15 +547,50 @@ class MicroNavDisplayController:
                     font=self.fonts_sys['large'],
                     fill=self.colors['white']
                 )
+
+            # Salva l'immagine corrente per aggiornamenti parziali
+            self._save_current_display()
+
             
             # Indicatori di stato
-            self._draw_wifi_indicator(draw, True)
-            self._draw_mqtt_indicator(draw, True)
-            self._draw_gps_indicator(draw, False)
+            # self._draw_wifi_indicator(draw, True)
+            # self._draw_mqtt_indicator(draw, True)
+            # self._draw_gps_indicator(draw, True, False)
             
         except Exception as e:
             logger.error(f"Errore disegno contenuto navigazione: {e}")
 
+    def show_route_overview(self, route_data: Dict[str, Any]):
+        """Mostra panoramica del percorso"""
+        if not self.is_initialized:
+            logger.error("Display non inizializzato per mostrare panoramica percorso")
+            return
+        
+        try:
+            # Pulisci lo schermo prima di mostrare la panoramica
+            # logger.debug("Pulizia schermo prima di panoramica")
+            # self.clear_display()
+            # time.sleep(0.3)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            
+            origin = route_data.get('origin', '')
+            destination = route_data.get('destination', '')
+            logger.debug(f"Mostrando panoramica: origine='{origin[:50]}...', destinazione='{destination[:50]}...'")
+            
+            with canvas(self.device) as draw:
+                self._draw_route_overview_content(draw, route_data)
+            
+            self.current_route = route_data
+            self.display_state['current_screen'] = 'route_overview'
+            self.display_state['last_update'] = datetime.now()
+            
+            # Salva l'immagine corrente per aggiornamenti parziali (DOPO l'aggiornamento dello stato)
+            self._save_current_display()
+            
+            logger.info(f"Panoramica percorso visualizzata: {origin} → {destination}")
+            
+        except Exception as e:
+            logger.error(f"Errore visualizzazione panoramica: {e}")
+    
     def _draw_route_overview_content(self, draw, route_data: Dict[str, Any] = None):
         """Disegna il contenuto della schermata panoramica percorso"""
         try:
@@ -649,7 +694,6 @@ class MicroNavDisplayController:
         except Exception as e:
             logger.error(f"Errore disegno contenuto panoramica: {e}")
 
-
     def show_navigation_instruction(self, instruction_data: Dict[str, Any]):
         """Mostra istruzione di navigazione"""
         if not self.is_initialized:
@@ -658,21 +702,21 @@ class MicroNavDisplayController:
         
         try:
             # Pulisci lo schermo prima di mostrare l'istruzione
-            logger.debug("Pulizia schermo prima di istruzione")
-            self.clear_display()
-            time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
+            # logger.debug("Pulizia schermo prima di istruzione")
+            # self.clear_display()
+            # time.sleep(0.1)  # Piccola pausa per assicurarsi che la pulizia sia completata
             
             logger.debug(f"Inizio visualizzazione istruzione: {instruction_data.get('instruction', '')[:30]}...")
             
             with canvas(self.device) as draw:
                 self._draw_navigation_content(draw, instruction_data)
             
-            # Salva l'immagine corrente per aggiornamenti parziali
-            self._save_current_display()
-            
             self.current_instruction = instruction_data
             self.display_state['current_screen'] = 'navigation'
             self.display_state['last_update'] = datetime.now()
+            
+            # Salva l'immagine corrente per aggiornamenti parziali (DOPO l'aggiornamento dello stato)
+            self._save_current_display()
             
             logger.info(f"✅ Istruzione visualizzata correttamente: {instruction_data.get('instruction', '')[:30]}...")
             
@@ -681,37 +725,6 @@ class MicroNavDisplayController:
             logger.error(f"   Tipo errore: {type(e).__name__}")
             import traceback
             logger.error(f"   Traceback: {traceback.format_exc()}")
-    
-    def show_route_overview(self, route_data: Dict[str, Any]):
-        """Mostra panoramica del percorso"""
-        if not self.is_initialized:
-            logger.error("Display non inizializzato per mostrare panoramica percorso")
-            return
-        
-        try:
-            # Pulisci lo schermo prima di mostrare la panoramica
-            logger.debug("Pulizia schermo prima di panoramica")
-            self.clear_display()
-            time.sleep(0.3)  # Piccola pausa per assicurarsi che la pulizia sia completata
-            
-            origin = route_data.get('origin', '')
-            destination = route_data.get('destination', '')
-            logger.debug(f"Mostrando panoramica: origine='{origin[:50]}...', destinazione='{destination[:50]}...'")
-            
-            with canvas(self.device) as draw:
-                self._draw_route_overview_content(draw, route_data)
-            
-            # Salva l'immagine corrente per aggiornamenti parziali
-            self._save_current_display()
-            
-            self.current_route = route_data
-            self.display_state['current_screen'] = 'route_overview'
-            self.display_state['last_update'] = datetime.now()
-            
-            logger.info(f"Panoramica percorso visualizzata: {origin} → {destination}")
-            
-        except Exception as e:
-            logger.error(f"Errore visualizzazione panoramica: {e}")
     
     def _draw_wrapped_text(self, draw, text: str, position: Tuple[int, int], 
                           max_width: int, font, color):
@@ -784,7 +797,7 @@ class MicroNavDisplayController:
             icon_path = f"{self.directions_icons_config['path']}/{icon_name}.png"
             
             logger.debug(f"Path icona costruito: {icon_path}")
-            logger.info(f"Dati manovra - type: '{maneuver_type}', modifier: '{modifier}'")
+            logger.debug(f"Dati manovra - type: '{maneuver_type}', modifier: '{modifier}'")
             
             return icon_path
             
@@ -846,7 +859,10 @@ class MicroNavDisplayController:
             draw.text((icon_x-5, icon_y-5), "?", font=self.fonts_sm['small'], fill=self.colors['white'])
         except Exception as e:
             logger.error(f"Errore disegno icona fallback: {e}")
-    
+
+
+### Schermate di stato delle connessioni
+
     def _draw_wifi_indicator(self, draw, connected: bool):
         """Disegna indicatore WiFi"""
         try:
@@ -887,6 +903,96 @@ class MicroNavDisplayController:
         except Exception as e:
             logger.error(f"Errore indicatore MQTT: {e}")
     
+    def _draw_gps_indicator(self, draw, connected: bool, has_fix: bool):
+        """Disegna indicatore GPS"""
+        try:
+            x = 110
+            y = 35
+            
+            if connected and has_fix:
+                # GPS connesso (verde)
+                draw.ellipse((x, y+5, x+5, y+10), fill=self.colors['green'])
+                # draw.rectangle((x, y, x+32, y+18), outline=self.colors['white'], width=1)
+                draw.text((x+8, y+2), "GPS", font=self.fonts_sm['small'], fill=self.colors['white'])
+            elif connected and not has_fix:
+                # GPS connesso ma no fix (giallo)
+                draw.ellipse((x, y+5, x+5, y+10), fill=self.colors['yellow'])
+                # draw.rectangle((x, y, x+32, y+18), outline=self.colors['white'], width=1)
+                draw.text((x+8, y+2), "GPS", font=self.fonts_sm['small'], fill=self.colors['gray'])
+            else:
+                # GPS disconnesso (rosso)
+                draw.ellipse((x, y+5, x+5, y+10), fill=self.colors['gray'])
+                # draw.rectangle((x, y, x+32, y+18), outline=self.colors['gray'], width=1)
+                draw.text((x+8, y+2), "GPS", font=self.fonts_sm['small'], fill=self.colors['gray'])
+                
+        except Exception as e:
+            logger.error(f"Errore indicatore MQTT: {e}")
+
+    def update_connections_status(self, wifi_connected: bool, mqtt_connected: bool, gps_connected: bool, gps_has_fix: bool):
+        """Aggiorna solo l'indicatore WIFI, MQTT e GPS senza ridisegnare tutto lo schermo"""
+        if not self.is_initialized:
+            return
+        
+        try:
+            # Se non abbiamo un'immagine corrente, ridisegna tutto
+            if self.current_display_image is None:
+                logger.debug("Nessuna immagine corrente, ridisegno completo")
+                with canvas(self.device) as draw:
+                    # Ridisegna tutto lo schermo basandosi sullo stato corrente
+                    if self.display_state['current_screen'] == 'idle':
+                        self._draw_idle_content(draw)
+                    elif self.display_state['current_screen'] == 'navigation':
+                        self._draw_navigation_content(draw)
+                    elif self.display_state['current_screen'] == 'route_overview':
+                        self._draw_route_overview_content(draw)
+                    
+                    # Aggiorna l'indicatore WIFI, MQTT e GPS
+                    self._draw_wifi_indicator(draw, wifi_connected)
+                    self._draw_mqtt_indicator(draw, mqtt_connected)
+                    self._draw_gps_indicator(draw, gps_connected, gps_has_fix)
+                
+                # Salva l'immagine corrente
+                self._save_current_display()
+                return
+            
+            # Aggiornamento parziale: modifica solo l'area WIFI, MQTT e GPS
+            logger.debug("Aggiornamento parziale indicatore WIFI, MQTT e GPS")
+            
+            # Crea un canvas temporaneo per disegnare solo l'indicatore WIFI, MQTT e GPS
+            temp_image = self.current_display_image.copy()
+            temp_draw = ImageDraw.Draw(temp_image)
+            
+                # Disegna solo l'indicatore WIFI, MQTT e GPS sull'immagine esistente
+            self._draw_wifi_indicator(temp_draw, wifi_connected)
+            self._draw_mqtt_indicator(temp_draw, mqtt_connected)
+            self._draw_gps_indicator(temp_draw, gps_connected, gps_has_fix)
+           
+            # Aggiorna il buffer e il display
+            self.current_display_image = temp_image
+            self._update_display_from_buffer()
+                
+        except Exception as e:
+            logger.error(f"Errore aggiornamento status WIFI, MQTT e GPS: {e}")
+            # Fallback: ridisegna tutto
+            try:
+                with canvas(self.device) as draw:
+                    if self.display_state['current_screen'] == 'idle':
+                        self._draw_idle_content(draw)
+                    elif self.display_state['current_screen'] == 'navigation':
+                        self._draw_navigation_content(draw)
+                    elif self.display_state['current_screen'] == 'route_overview':
+                        self._draw_route_overview_content(draw)
+                    self._draw_wifi_indicator(draw, wifi_connected)
+                    self._draw_mqtt_indicator(draw, mqtt_connected)
+                    self._draw_gps_indicator(draw, gps_connected, gps_has_fix)
+                self._save_current_display()
+            except Exception as fallback_error:
+                logger.error(f"Errore anche nel fallback: {fallback_error}")
+    
+
+
+### Funzioni di supporto
+
     def _save_current_display(self):
         """Salva l'immagine corrente del display nel buffer"""
         try:
@@ -918,81 +1024,6 @@ class MicroNavDisplayController:
         except Exception as e:
             logger.error(f"Errore aggiornamento display da buffer: {e}")
         return False
-    
-    def update_mqtt_status(self, connected: bool):
-        """Aggiorna solo l'indicatore MQTT senza ridisegnare tutto lo schermo"""
-        if not self.is_initialized:
-            return
-        
-        try:
-            # Se non abbiamo un'immagine corrente, ridisegna tutto
-            if self.current_display_image is None:
-                logger.debug("Nessuna immagine corrente, ridisegno completo")
-                with canvas(self.device) as draw:
-                    # Ridisegna tutto lo schermo basandosi sullo stato corrente
-                    if self.display_state['current_screen'] == 'idle':
-                        self._draw_idle_content(draw)
-                    elif self.display_state['current_screen'] == 'navigation':
-                        self._draw_navigation_content(draw)
-                    elif self.display_state['current_screen'] == 'route_overview':
-                        self._draw_route_overview_content(draw)
-                    
-                    # Aggiorna l'indicatore MQTT
-                    self._draw_mqtt_indicator(draw, connected)
-                
-                # Salva l'immagine corrente
-                self._save_current_display()
-                return
-            
-            # Aggiornamento parziale: modifica solo l'area MQTT
-            logger.debug("Aggiornamento parziale indicatore MQTT")
-            
-            # Crea un canvas temporaneo per disegnare solo l'indicatore MQTT
-            temp_image = self.current_display_image.copy()
-            temp_draw = ImageDraw.Draw(temp_image)
-            
-            # Disegna solo l'indicatore MQTT sull'immagine esistente
-            self._draw_mqtt_indicator(temp_draw, connected)
-            
-            # Aggiorna il buffer e il display
-            self.current_display_image = temp_image
-            self._update_display_from_buffer()
-                
-        except Exception as e:
-            logger.error(f"Errore aggiornamento status MQTT: {e}")
-            # Fallback: ridisegna tutto
-            try:
-                with canvas(self.device) as draw:
-                    if self.display_state['current_screen'] == 'idle':
-                        self._draw_idle_content(draw)
-                    elif self.display_state['current_screen'] == 'navigation':
-                        self._draw_navigation_content(draw)
-                    elif self.display_state['current_screen'] == 'route_overview':
-                        self._draw_route_overview_content(draw)
-                    self._draw_mqtt_indicator(draw, connected)
-                self._save_current_display()
-            except Exception as fallback_error:
-                logger.error(f"Errore anche nel fallback: {fallback_error}")
-    
-    def _draw_gps_indicator(self, draw, connected: bool):
-        """Disegna indicatore GPS"""
-        try:
-            x = 110
-            y = 35
-            
-            if connected:
-                # GPS connesso (verde)
-                draw.ellipse((x, y+5, x+5, y+10), fill=self.colors['green'])
-                # draw.rectangle((x, y, x+32, y+18), outline=self.colors['white'], width=1)
-                draw.text((x+8, y+2), "GPS", font=self.fonts_sm['small'], fill=self.colors['white'])
-            else:
-                # GPS disconnesso (rosso)
-                draw.ellipse((x, y+5, x+5, y+10), fill=self.colors['gray'])
-                # draw.rectangle((x, y, x+32, y+18), outline=self.colors['gray'], width=1)
-                draw.text((x+8, y+2), "GPS", font=self.fonts_sm['small'], fill=self.colors['gray'])
-                
-        except Exception as e:
-            logger.error(f"Errore indicatore MQTT: {e}")
     
     def set_brightness(self, brightness: int):
         """Imposta luminosità display (0-100)"""
@@ -1123,98 +1154,3 @@ class MicroNavDisplayController:
                 pass
         
         logger.info("✅ Display Controller fermato")
-
-# Esempio di utilizzo
-if __name__ == "__main__":
-    # Crea controller display
-    display = MicroNavDisplayController()
-    
-    try:
-        # Avvia display
-        if display.start():
-            print("✅ Display avviato. Premi Ctrl+C per fermare.")
-            
-            # Test schermate
-            time.sleep(2)
-            
-            # Test istruzione - Turn Right
-            test_instruction = {
-                'instruction': 'Gira a destra su Via Roma',
-                'distance': 150,
-                'duration': 30,
-                'maneuver': {'type': 'turn', 'modifier': 'right'},
-                'icon': 'turn_right'
-            }
-            display.show_navigation_instruction(test_instruction)
-            
-            time.sleep(3)
-            
-            # Test istruzione - Turn Left
-            test_instruction_left = {
-                'instruction': 'Gira a sinistra su Via Torino',
-                'distance': 200,
-                'duration': 40,
-                'maneuver': {'type': 'turn', 'modifier': 'left'},
-                'icon': 'turn_left'
-            }
-            display.show_navigation_instruction(test_instruction_left)
-            
-            time.sleep(3)
-            
-            # Test istruzione - Continue (senza modifier)
-            test_instruction_continue = {
-                'instruction': 'Continua dritto su Via Nazionale',
-                'distance': 500,
-                'duration': 60,
-                'maneuver': {'type': 'continue'},
-                'icon': 'straight'
-            }
-            display.show_navigation_instruction(test_instruction_continue)
-            
-            time.sleep(3)
-            
-            # Test istruzione - U-turn
-            test_instruction_uturn = {
-                'instruction': 'Fai inversione a U',
-                'distance': 50,
-                'duration': 15,
-                'maneuver': {'type': 'turn', 'modifier': 'uturn'},
-                'icon': 'uturn'
-            }
-            display.show_navigation_instruction(test_instruction_uturn)
-            
-            time.sleep(3)
-            
-            # Test panoramica percorso
-            test_route = {
-                'origin': 'Via Milano, 123',
-                'destination': 'Piazza Duomo',
-                'totalDistance': 2500,
-                'totalDuration': 300,
-                'steps': [{'instruction': 'Gira a destra'}, {'instruction': 'Vai dritto'}]
-            }
-            display.show_route_overview(test_route)
-            
-            time.sleep(3)
-            
-            # Torna a idle
-            display.show_idle_screen()
-            
-            # Test aggiornamento parziale
-            display.test_partial_update()
-            
-            # Loop principale
-            while True:
-                time.sleep(1)
-        else:
-            print("❌ Errore avvio display")
-    
-    except KeyboardInterrupt:
-        print("\n⏹️  Arresto display...")
-        display.stop()
-        print("✅ Display fermato")
-    
-    except Exception as e:
-        print(f"❌ Errore: {e}")
-        display.stop()
-

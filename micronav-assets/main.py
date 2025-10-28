@@ -163,6 +163,11 @@ class MicroNavSystem:
                     self.mqtt_client.stop()
                 self.mqtt_client = MicroNavMQTTClient(self.config['mqtt'])
             
+            # Assegna riferimento display_controller al MQTT client, per aggiornamento stato connessioni
+            if self.mqtt_client and self.display_controller:
+                self.mqtt_client.display_controller = self.display_controller
+                logger.info("🔗 Display controller collegato al MQTT client")
+            
             # Registra handler per messaggi MQTT
             self._register_mqtt_handlers()
             

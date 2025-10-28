@@ -327,7 +327,23 @@ class MicroNavMQTTClient:
                 
                 if self.client and self.is_connected:
                     self.client.publish(topic, payload, qos=1, retain=True)
-                    logger.debug(f"📡 Pubblicato stato connessioni: {payload}")
+                    logger.info(f"📡 Pubblicato stato connessioni: {payload}")
+                    # Aggiorna indicatori di connessione sul display
+                    if hasattr(self, 'display_controller'):
+                        wifi_status = self.system_stats.get('wifi_connected', False)
+                        mqtt_status = self.is_connected
+                        gps_status = self.system_stats.get('gps_connected', False)
+                        gps_has_fix = self.system_stats.get('gps_fix', False)
+                        
+                        self.display_controller.update_connections_status(
+                            wifi_connected=wifi_status,
+                            mqtt_connected=mqtt_status, 
+                            gps_connected=gps_status,
+                            gps_has_fix=gps_has_fix
+                        )
+                        logger.info(f"🔄 Display aggiornato - WiFi: {wifi_status}, MQTT: {mqtt_status}, GPS: {gps_status}, GPS has fix: {gps_has_fix}")
+                    else:
+                        logger.warning("Display controller non trovato, salto aggiornamento indicatori")
                 else:
                     logger.debug("MQTT non connesso, salto pubblicazione connessioni")
                     
