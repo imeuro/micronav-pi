@@ -11,14 +11,9 @@ import threading
 import socket
 from typing import Dict, Callable, Optional, Any
 from datetime import datetime
+import paho.mqtt.client as mqtt
 
-try:
-    import paho.mqtt.client as mqtt
-except ImportError:
-    print("❌ Libreria paho-mqtt non trovata. Installa con: pip install paho-mqtt")
-    exit(1)
-
-from config import get_topics_config
+from config import get_mqtt_config, get_timestamp_ms
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
@@ -59,7 +54,7 @@ class MicroNavMQTTClient:
         
         # Carica configurazione topic
         device_id = config.get('device_id', 'vehicle-001')
-        self.topics = get_topics_config(device_id)
+        self.topics = get_mqtt_config(device_id)
         
         # Statistiche sistema (aggiornate dal sistema principale)
         self.system_stats = {
@@ -110,7 +105,7 @@ class MicroNavMQTTClient:
         """Configura il client MQTT"""
         try:
             # Crea client MQTT
-            client_id = f"micronav_raspberry_{int(time.time())}"
+            client_id = f"micronav_raspberry_{get_timestamp_ms()}"
             self.client = mqtt.Client(client_id=client_id)
             
             # Configura autenticazione se disponibile
@@ -119,7 +114,7 @@ class MicroNavMQTTClient:
                     self.config['username'], 
                     self.config['password']
                 )
-                logger.info("Autenticazione MQTT configurata")
+                logger.debug("Autenticazione MQTT configurata")
             
             # Configura callback
             self.client.on_connect = self._on_connect
@@ -131,18 +126,14 @@ class MicroNavMQTTClient:
             will_topic = self.topics['publish']['status']
             will_payload = json.dumps({
                 'status': 'offline',
-                'timestamp': int(time.time()),
-                'message': 'Raspberry Pi disconnesso',
-                'ip': {
-                    'ip': 'N/A',
-                    'timestamp': int(time.time())
-                }
+                'timestamp': get_timestamp_ms(),
+                'message': self.topics['device_id'] + ' spento (LWT)',
             })
 
             self.client.will_set(will_topic, will_payload, qos=1, retain=True)
 
 
-            logger.info("Client MQTT configurato")
+            logger.debug("Client MQTT configurato")
             return True
             
         except Exception as e:
@@ -160,7 +151,7 @@ class MicroNavMQTTClient:
             broker_port = self.config.get('broker_port', 1883)
             keepalive = self.config.get('keepalive', 60)
             
-            logger.info(f"Connessione a broker MQTT: {broker_host}:{broker_port}")
+            logger.debug(f"Connessione a broker MQTT: {broker_host}:{broker_port}")
             
             self.client.connect(broker_host, broker_port, keepalive)
             self.client.loop_start()
@@ -172,7 +163,6 @@ class MicroNavMQTTClient:
                 time.sleep(0.1)
             
             if self.is_connected:
-                logger.info("✅ Connesso al broker MQTT")
                 self.stats['last_connection_time'] = datetime.now()
                 return True
             else:
@@ -189,28 +179,27 @@ class MicroNavMQTTClient:
         
         if self.client and self.is_connected:
             try:
-                # Invia messaggio di disconnessione
+                # Invia messaggio di disconnessione MQTT
                 disconnect_topic = self.topics['publish']['status']
                 disconnect_payload = json.dumps({
-                    'status': 'offline',
-                    'timestamp': int(time.time()),
+                    'status': 'spento',
+                    'timestamp': get_timestamp_ms(),
                     'message': 'Disconnessione normale'
                 })
-                
                 self.client.publish(disconnect_topic, disconnect_payload, qos=1, retain=True)
 
-                connections_topic = self.topics['publish']['connections']
+                        
+                connections_topic = self.mqtt_client.topics['publish']['connections']
                 connections_payload = json.dumps({
                     'wifi': False,
                     'mqtt': False,
-                    'gps': False,
-                    'gps_has_fix': False,
-                    'timestamp': int(time.time()),
-                    'device_id': self.topics['device_id'],
+                    'timestamp': get_timestamp_ms(),
+                    'device_id': self.mqtt_client.topics['device_id'],
                     'device_ip_addr': "N/A"
                 })
                 
-                self.client.publish(connections_topic, connections_payload, qos=1, retain=True)
+                self.mqtt_client.client.publish(connections_topic, connections_payload, qos=1, retain=True)
+
                 
                 # Disconnetti
                 self.client.loop_stop()
@@ -274,7 +263,7 @@ class MicroNavMQTTClient:
         
         payload = {
             'status': status,
-            'timestamp': int(time.time()),
+            'timestamp': get_timestamp_ms(),
             'message': message,
             'device_id': self.topics['device_id'],
             'uptime': time.time() - self.stats.get('start_time', time.time()),
@@ -299,7 +288,7 @@ class MicroNavMQTTClient:
             logger.error(f"Errore pubblicazione status: {e}")
             return False
 
-    def _publish_connections_periodically(self, interval_seconds: int = 60):
+    def _publish_connections_periodically(self, interval_seconds: int = 5):
         """Pubblica periodicamente lo stato delle connessioni su topic dedicato"""
         try:
             topic = self.topics['publish'].get('connections')
@@ -309,7 +298,7 @@ class MicroNavMQTTClient:
             logger.warning("Topic connections non configurato")
             return
         
-        logger.info(f"🔄 Avvio pubblicazione periodica connessioni ogni {interval_seconds}s su {topic}")
+        logger.debug(f"🔄 Avvio pubblicazione periodica connessioni ogni {interval_seconds}s su {topic}")
         
         while self.running:
             try:
@@ -320,14 +309,14 @@ class MicroNavMQTTClient:
                     'mqtt': self.is_connected,
                     'gps': self.system_stats.get('gps_connected', False),
                     'gps_has_fix': self.system_stats.get('gps_fix', False),
-                    'timestamp': int(time.time()),
+                    'timestamp': get_timestamp_ms(),
                     'device_id': self.topics['device_id'],
                     'device_ip_addr': ip_addr
                 })
                 
                 if self.client and self.is_connected:
                     self.client.publish(topic, payload, qos=1, retain=True)
-                    logger.info(f"📡 Pubblicato stato connessioni: {payload}")
+                    logger.debug(f"📡 Pubblicato stato connessioni: {payload}")
                     # Aggiorna indicatori di connessione sul display
                     if hasattr(self, 'display_controller'):
                         wifi_status = self.system_stats.get('wifi_connected', False)
@@ -335,13 +324,25 @@ class MicroNavMQTTClient:
                         gps_status = self.system_stats.get('gps_connected', False)
                         gps_has_fix = self.system_stats.get('gps_fix', False)
                         
-                        self.display_controller.update_connections_status(
-                            wifi_connected=wifi_status,
-                            mqtt_connected=mqtt_status, 
-                            gps_connected=gps_status,
-                            gps_has_fix=gps_has_fix
-                        )
-                        logger.info(f"🔄 Display aggiornato - WiFi: {wifi_status}, MQTT: {mqtt_status}, GPS: {gps_status}, GPS has fix: {gps_has_fix}")
+                        # Throttling: evita aggiornamenti troppo frequenti durante la visualizzazione
+                        # di contenuti importanti come route_overview
+                        current_screen = getattr(self.display_controller, 'display_state', {}).get('current_screen', 'unknown')
+                        last_update = getattr(self.display_controller, 'display_state', {}).get('last_update')
+                        
+                        # Se siamo in route_overview e l'ultimo aggiornamento è recente (< 2 secondi),
+                        # salta l'aggiornamento per evitare interferenze
+                        if (current_screen == 'route_overview' and 
+                            last_update and 
+                            (time.time() - last_update.timestamp()) < 2.0):
+                            logger.debug("Route overview attivo, salto aggiornamento indicatori per evitare interferenze")
+                        else:
+                            self.display_controller.update_connections_status(
+                                wifi_connected=wifi_status,
+                                mqtt_connected=mqtt_status, 
+                                gps_connected=gps_status,
+                                gps_has_fix=gps_has_fix
+                            )
+                            logger.info(f"🔄 Display aggiornato - WiFi: {wifi_status}, MQTT: {mqtt_status}, GPS: {gps_status}, GPS has fix: {gps_has_fix}")
                     else:
                         logger.warning("Display controller non trovato, salto aggiornamento indicatori")
                 else:
@@ -377,7 +378,7 @@ class MicroNavMQTTClient:
             handler: Funzione da chiamare quando arriva un messaggio
         """
         self.message_handlers[topic_pattern] = handler
-        logger.info(f"Handler registrato per: {topic_pattern}")
+        logger.debug(f"Handler registrato per: {topic_pattern}")
     
     def _on_connect(self, client, userdata, flags, rc):
         """Callback per connessione MQTT"""
@@ -395,7 +396,7 @@ class MicroNavMQTTClient:
 
             # Avvia pubblicazione periodica IP
             try:
-                self.connections_thread = threading.Thread(target=self._publish_connections_periodically, args=(60,), daemon=True)
+                self.connections_thread = threading.Thread(target=self._publish_connections_periodically, daemon=True)
                 self.connections_thread.start()
             except Exception as e:
                 logger.error(f"Impossibile avviare publisher IP periodico: {e}")
@@ -425,7 +426,7 @@ class MicroNavMQTTClient:
             self.stats['messages_received'] += 1
             self.stats['last_message_time'] = datetime.now()
             
-            logger.info(f"📨 Messaggio ricevuto da: {topic}")
+            logger.debug(f"📨 Messaggio ricevuto da: {topic}")
             
             # Parsing JSON
             try:
@@ -467,7 +468,6 @@ class MicroNavMQTTClient:
             logger.info("✅ Client MQTT avviato")
             try:
                 current_ip = self.show_ip_addr()
-                print(f"IP locale: {current_ip}")
             except Exception:
                 pass
             return True
@@ -483,7 +483,7 @@ class MicroNavMQTTClient:
         # Rimuovi questa istanza dalla lista
         if self in self._instances:
             self._instances.remove(self)
-            logger.info(f"🗑️  Istanza MQTT rimossa. Rimangono {len(self._instances)} istanze")
+            logger.debug(f"🗑️  Istanza MQTT rimossa. Rimangono {len(self._instances)} istanze")
         
         logger.info("✅ Client MQTT fermato")
     

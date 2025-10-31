@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
+from config import get_gps_config
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class GPSPosition:
 class L76KGPSController:
     """Controller per il modulo GPS L76K Waveshare"""
     
-    def __init__(self, port: str = "/dev/ttyS0", baudrate: int = 9600, timeout: float = 2.0):
+    def __init__(self, port: str = get_gps_config().get('port', '/dev/ttyS0'), baudrate: int = get_gps_config().get('baudrate', 9600), timeout: float = get_gps_config().get('timeout', 1.0)):
         """
         Inizializza il controller GPS
         
@@ -64,7 +65,7 @@ class L76KGPSController:
         self.status = GPSStatus.DISCONNECTED
         self.position = GPSPosition()
         self.last_update = None
-        self.fix_timeout = 120  # secondi per ottenere fix
+        self.fix_timeout = get_gps_config().get('fix_timeout', 120)  # secondi per ottenere fix
         self.start_time = None
         
         # Threading
@@ -98,54 +99,100 @@ class L76KGPSController:
         Returns:
             bool: True se connessione riuscita
         """
-        try:
-            logger.info(f"Tentativo connessione GPS su {self.port}...")
-            
-            self.serial_connection = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                timeout=self.timeout,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                bytesize=serial.EIGHTBITS
-            )
-            
-            # Test connessione
-            if self.serial_connection.is_open:
-                self.status = GPSStatus.CONNECTED
-                self.start_time = time.time()
-                logger.info("✅ Connessione GPS stabilita")
+        # Lista di porte da provare in ordine di priorità
+        ports_to_try = [self.port]
+        
+        # Aggiungi porte alternative se la porta principale non è /dev/ttyS0
+        if self.port != '/dev/ttyS0':
+            ports_to_try.append('/dev/ttyS0')
+        
+        # Aggiungi porte USB comuni
+        ports_to_try.extend(['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0', '/dev/ttyACM1'])
+        
+        for port in ports_to_try:
+            try:
+                logger.debug(f"Tentativo connessione GPS su {port}...")
                 
-                # Avvia thread di lettura
-                self._start_reading_thread()
-                return True
-            else:
-                logger.error("❌ Impossibile aprire connessione seriale")
-                return False
+                self.serial_connection = serial.Serial(
+                    port=port,
+                    baudrate=self.baudrate,
+                    timeout=self.timeout,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    bytesize=serial.EIGHTBITS
+                )
                 
-        except serial.SerialException as e:
-            logger.error(f"❌ Errore connessione seriale: {e}")
-            self.status = GPSStatus.ERROR
-            return False
-        except Exception as e:
-            logger.error(f"❌ Errore generico connessione GPS: {e}")
-            self.status = GPSStatus.ERROR
-            return False
+                # Test connessione
+                if self.serial_connection.is_open:
+                    self.port = port  # Aggiorna la porta effettivamente utilizzata
+                    self.status = GPSStatus.CONNECTED
+                    self.start_time = time.time()
+                    logger.info(f"✅ Connessione GPS stabilita su {port}")
+                    
+                    # Avvia thread di lettura
+                    self._start_reading_thread()
+                    return True
+                else:
+                    logger.warning(f"⚠️ Impossibile aprire connessione seriale su {port}")
+                    continue
+                    
+            except serial.SerialException as e:
+                if "Operation not permitted" in str(e):
+                    logger.warning(f"⚠️ Permessi insufficienti per {port}: {e}")
+                    logger.info("💡 Suggerimento: Esegui 'sudo bash fix_gps_permissions.sh' per risolvere i permessi")
+                elif "could not open port" in str(e):
+                    logger.debug(f"🔍 Porta {port} non disponibile: {e}")
+                else:
+                    logger.warning(f"⚠️ Errore connessione seriale su {port}: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"⚠️ Errore generico connessione GPS su {port}: {e}")
+                continue
+        
+        # Se arriviamo qui, nessuna porta ha funzionato
+        logger.error("❌ Impossibile connettersi a nessuna porta seriale GPS")
+        logger.info("💡 Verifica che:")
+        logger.info("   1. Il modulo GPS sia collegato correttamente")
+        logger.info("   2. I permessi siano configurati (esegui fix_gps_permissions.sh)")
+        logger.info("   3. L'UART sia abilitato in /boot/config.txt")
+        logger.info("   4. La console seriale sia disabilitata")
+        self.status = GPSStatus.ERROR
+        return False
     
     def disconnect(self):
         """Disconnette dal modulo GPS"""
-        logger.info("Disconnessione GPS...")
+        logger.debug("Disconnessione GPS...")
         
         self.is_running = False
         
         if self.reading_thread and self.reading_thread.is_alive():
-            self.reading_thread.join(timeout=2.0)
+            self.reading_thread.join(timeout=get_gps_config().get('timeout', 2.0))
         
         if self.serial_connection and self.serial_connection.is_open:
             self.serial_connection.close()
         
         self.status = GPSStatus.DISCONNECTED
         logger.info("GPS disconnesso")
+
+        # avverto su MQTT che il GPS è disconnesso
+        if self.mqtt_client:
+            disconnect_topic = self.mqtt_client.topics['publish']['gps_position']
+            disconnect_payload = json.dumps({
+                'status': 'offline',
+                'timestamp': get_timestamp_ms(),
+                'message': 'GPS disconnesso',
+                'latitude': 0.0,
+                'longitude': 0.0,
+                'altitude': 0.0,
+                'speed': 0.0,
+                'course': 0.0,
+                'satellites': 0,
+                'hdop': 0.0,
+                'fix_quality': 0,
+                'timestamp': get_timestamp_ms(),
+                'is_valid': False
+            })
+            self.mqtt_client.client.publish(disconnect_topic, disconnect_payload, qos=1, retain=True)
     
     def _start_reading_thread(self):
         """Avvia il thread di lettura dati GPS"""
@@ -159,7 +206,7 @@ class L76KGPSController:
     
     def _reading_loop(self):
         """Loop principale di lettura dati GPS"""
-        logger.info("Inizio lettura dati GPS...")
+        logger.debug("Inizio lettura dati GPS...")
         
         while self.is_running and self.serial_connection and self.serial_connection.is_open:
             try:
@@ -180,7 +227,7 @@ class L76KGPSController:
                 logger.error(f"Errore lettura GPS: {e}")
                 time.sleep(0.1)
         
-        logger.info("Thread lettura GPS terminato")
+        logger.debug("Thread lettura GPS terminato")
     
     def _process_nmea_sentence(self, sentence: str):
         """
@@ -540,7 +587,7 @@ class L76KGPSController:
                 self.position.is_valid and 
                 self.position.fix_quality > 0)
     
-    def wait_for_fix(self, timeout: int = 60) -> bool:
+    def wait_for_fix(self, timeout: int = get_gps_config().get('fix_timeout', 60)) -> bool:
         """
         Attende un fix GPS
         
@@ -550,7 +597,7 @@ class L76KGPSController:
         Returns:
             bool: True se fix ottenuto
         """
-        logger.info(f"Attesa fix GPS (timeout: {timeout}s)...")
+        logger.debug(f"Attesa fix GPS (timeout: {timeout}s)...")
         
         start_time = time.time()
         while time.time() - start_time < timeout:
@@ -608,7 +655,7 @@ class L76KGPSController:
     
     def configure_gps(self):
         """Configura il modulo GPS con parametri ottimali"""
-        logger.info("Configurazione GPS...")
+        logger.debug("Configurazione GPS...")
         
         # Comandi di configurazione
         commands = [
@@ -626,7 +673,7 @@ class L76KGPSController:
             if self.send_command(cmd):
                 time.sleep(0.5)
         
-        logger.info("Configurazione GPS completata")
+        logger.debug("Configurazione GPS completata")
 
 # Funzioni di utilità
 def format_coordinates(latitude: float, longitude: float) -> str:
@@ -677,57 +724,57 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     
     return R * c
 
-if __name__ == "__main__":
-    # Test del modulo GPS
-    import sys
+# if __name__ == "__main__":
+#     # Test del modulo GPS
+#     import sys
     
-    # Configurazione logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+#     # Configurazione logging
+#     logging.basicConfig(
+#         level=logging.INFO,
+#         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+#     )
     
-    def on_position_update(position: GPSPosition):
-        """Callback per aggiornamento posizione"""
-        print(f"📍 Posizione: {format_coordinates(position.latitude, position.longitude)}")
-        print(f"   Altitudine: {position.altitude:.1f}m")
-        print(f"   Velocità: {position.speed:.1f}m/s")
-        print(f"   Satelliti: {position.satellites}")
-        print(f"   HDOP: {position.hdop:.1f}")
-        print()
+#     def on_position_update(position: GPSPosition):
+#         """Callback per aggiornamento posizione"""
+#         print(f"📍 Posizione: {format_coordinates(position.latitude, position.longitude)}")
+#         print(f"   Altitudine: {position.altitude:.1f}m")
+#         print(f"   Velocità: {position.speed:.1f}m/s")
+#         print(f"   Satelliti: {position.satellites}")
+#         print(f"   HDOP: {position.hdop:.1f}")
+#         print()
     
-    def on_status_change(status: GPSStatus):
-        """Callback per cambio stato"""
-        print(f"🔄 Stato GPS: {status.value}")
+#     def on_status_change(status: GPSStatus):
+#         """Callback per cambio stato"""
+#         print(f"🔄 Stato GPS: {status.value}")
     
-    # Crea controller GPS
-    gps = L76KGPSController()
-    gps.on_position_update = on_position_update
-    gps.on_status_change = on_status_change
+#     # Crea controller GPS
+#     gps = L76KGPSController()
+#     gps.on_position_update = on_position_update
+#     gps.on_status_change = on_status_change
     
-    try:
-        # Connetti
-        if gps.connect():
-            print("✅ GPS connesso")
+#     try:
+#         # Connetti
+#         if gps.connect():
+#             print("✅ GPS connesso")
             
-            # Configura
-            gps.configure_gps()
+#             # Configura
+#             gps.configure_gps()
             
-            # Attendi fix
-            if gps.wait_for_fix(timeout=60):
-                print("✅ Fix ottenuto!")
+#             # Attendi fix
+#             if gps.wait_for_fix(timeout=get_gps_config().get('fix_timeout', 60)):
+#                 print("✅ Fix ottenuto!")
                 
-                # Mostra posizione per 30 secondi
-                for i in range(30):
-                    if gps.has_fix():
-                        pos = gps.get_position()
-                        print(f"📍 {format_coordinates(pos.latitude, pos.longitude)}")
-                    time.sleep(1)
-            else:
-                print("❌ Fix non ottenuto")
+#                 # Mostra posizione per 30 secondi
+#                 for i in range(30):
+#                     if gps.has_fix():
+#                         pos = gps.get_position()
+#                         print(f"📍 {format_coordinates(pos.latitude, pos.longitude)}")
+#                     time.sleep(1)
+#             else:
+#                 print("❌ Fix non ottenuto")
         
-    except KeyboardInterrupt:
-        print("\n⏹️  Interruzione utente")
-    finally:
-        gps.disconnect()
-        print("🔌 GPS disconnesso")
+#     except KeyboardInterrupt:
+#         print("\n⏹️  Interruzione utente")
+#     finally:
+#         gps.disconnect()
+#         print("🔌 GPS disconnesso")

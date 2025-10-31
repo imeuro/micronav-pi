@@ -13,5 +13,7 @@ micronav-assets/__pycache__
 micronav-assets/logs/micronav.log
 micronav-assets/venv
 
+micronav-assets/speedcams/json/*
+
 push.sh
 micronav.service

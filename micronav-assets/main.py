@@ -12,26 +12,63 @@ import threading
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 
-# Import componenti
-from config import get_config, validate_config
+# Configurazione logging PRIMA degli import dei moduli
+def setup_logging():
+    """Configura il logging usando la configurazione centralizzata"""
+    if not logging.getLogger().handlers:
+        # Import temporaneo solo per la configurazione
+        from config import get_logging_config
+        logging_config = get_logging_config()
+        
+        # Configura il root logger
+        logging.basicConfig(
+            level=getattr(logging, logging_config['level']),
+            format=logging_config['format'],
+            handlers=[
+                logging.FileHandler(logging_config['file']),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        # Forza il livello INFO su tutti i logger esistenti e futuri
+        # Questo risolve il problema dei messaggi DEBUG che appaiono nonostante il livello INFO
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        
+        # Forza il livello INFO su tutti i logger dei moduli
+        for logger_name in ['mqtt_client', 'display_controller', 'gps_controller', 'config', '__main__']:
+            module_logger = logging.getLogger(logger_name)
+            module_logger.setLevel(logging.INFO)  # Forza INFO invece di NOTSET
+            module_logger.propagate = True  # Assicura che i messaggi vengano propagati
+
+# Configura il logging PRIMA degli import
+setup_logging()
+
+# Import componenti DOPO la configurazione del logging
+from config import get_config, validate_config, get_logging_config, get_timestamp_ms
 from mqtt_client import MicroNavMQTTClient
 from display_controller import MicroNavDisplayController
 from gps_controller import L76KGPSController, GPSPosition, GPSStatus
+from speedcams.speedcams_controller import SpeedCamsController
 # from wifi_monitor import MicroNavWiFiMonitor
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
 
-# Configura il logging solo se non è già configurato
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('/home/micronav/micronav-pi/micronav-assets/logs/micronav.log'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+# Forza il livello INFO su tutti i logger dopo gli import
+def force_info_level():
+    """Forza il livello INFO su tutti i logger esistenti"""
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Forza INFO su tutti i logger conosciuti
+    for logger_name in ['mqtt_client', 'display_controller', 'gps_controller', 'config', '__main__']:
+        module_logger = logging.getLogger(logger_name)
+        module_logger.setLevel(logging.INFO)
+        module_logger.propagate = True
+
+# Forza il livello INFO dopo gli import
+force_info_level()
 
 class MicroNavSystem:
     """Sistema principale MicroNav Raspberry Pi"""
@@ -94,7 +131,7 @@ class MicroNavSystem:
             return True
             
         try:
-            logger.info("🚀 Avvio inizializzazione sistema MicroNav...")
+            logger.debug("🚀 Avvio inizializzazione sistema MicroNav...")
             
             # Carica configurazione
             self.config = get_config()
@@ -102,7 +139,7 @@ class MicroNavSystem:
                 logger.error("❌ Configurazione non valida")
                 return False
             
-            logger.info("✅ Configurazione caricata")
+            logger.debug("✅ Configurazione caricata")
             
             # Inizializza display controller PRIMA (priorità massima)
             logger.debug("📱 Inizializzazione display (priorità alta)...")
@@ -114,7 +151,7 @@ class MicroNavSystem:
             logger.info("✅ Display inizializzato")
             
             # Inizializza GPS controller
-            logger.debug("🛰️  Inizializzazione GPS controller...")
+            logger.info("🛰️  Inizializzazione GPS controller...")
             try:
                 gps_config = self.config['gps']
                 self.gps_controller = L76KGPSController(
@@ -149,8 +186,8 @@ class MicroNavSystem:
             logger.info("📶 WiFi monitor disabilitato")
             self.wifi_monitor = None
             
-            # Inizializza MQTT client in parallelo
-            logger.info("📡 Inizializzazione MQTT client in parallelo...")
+            # Inizializza MQTT client (avvio in thread separato)
+            logger.info("📡 Inizializzazione MQTT client...")
             
             # Controlla se esiste già un'istanza
             existing_client = MicroNavMQTTClient.get_instance()
@@ -166,7 +203,7 @@ class MicroNavSystem:
             # Assegna riferimento display_controller al MQTT client, per aggiornamento stato connessioni
             if self.mqtt_client and self.display_controller:
                 self.mqtt_client.display_controller = self.display_controller
-                logger.info("🔗 Display controller collegato al MQTT client")
+                logger.debug("🔗 Display controller collegato al MQTT client")
             
             # Registra handler per messaggi MQTT
             self._register_mqtt_handlers()
@@ -189,10 +226,10 @@ class MicroNavSystem:
     def _initialize_mqtt_async(self):
         """Inizializza MQTT client in modo asincrono"""
         try:
-            logger.info("📡 Avvio MQTT client in background...")
+            logger.debug("📡 Avvio MQTT client in background...")
             if self.mqtt_client.start():
                 self.system_stats['mqtt_connected'] = True
-                logger.info("✅ MQTT client inizializzato in background")
+                logger.debug("✅ MQTT client inizializzato in background")
                 # Aggiorna statistiche MQTT
                 self._update_mqtt_system_stats()
             else:
@@ -254,7 +291,7 @@ class MicroNavSystem:
                 self._handle_gps_position
             )
             
-            logger.info("✅ Handler MQTT registrati")
+            logger.debug("✅ Handler MQTT registrati")
             
         except Exception as e:
             logger.error(f"Errore registrazione handler MQTT: {e}")
@@ -280,36 +317,37 @@ class MicroNavSystem:
                 # Pubblica posizione GPS via MQTT
                 if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
                     gps_data = {
-                        'latitude': position.latitude,
-                        'longitude': position.longitude,
-                        'altitude': position.altitude,
-                        'speed': position.speed,
-                        'course': position.course,
-                        'satellites': position.satellites,
-                        'hdop': position.hdop,
-                        'fix_quality': position.fix_quality,
-                        'timestamp': position.timestamp.isoformat() if position.timestamp else None,
-                        'is_valid': position.is_valid
+                        'latitude': position.latitude if position.latitude else 0,
+                        'longitude': position.longitude if position.longitude else 0,
+                        'altitude': position.altitude if position.altitude else 0,
+                        'speed': position.speed if position.speed else 0,
+                        'course': position.course if position.course else 0,
+                        'satellites': int(position.satellites) if position.satellites else 0,
+                        'hdop': position.hdop if position.hdop else 0,
+                        'fix_quality': int(position.fix_quality) if position.fix_quality else 0,
+                        'timestamp': position.timestamp if position.timestamp else None,
+                        'is_valid': bool(position.is_valid)
                     }
                 
                     # Aggiorna timestamp ultimo invio
                     self._last_gps_publish_time = current_time
                     
                     # Log posizione se valida (solo quando inviamo)
-                    if position.is_valid and position.fix_quality > 0:
+                    #if position.is_valid and position.fix_quality > 0:
+                    if True:
                         self._safe_publish_status(
                             self.mqtt_client.topics['publish']['gps_position'],
-                            "gps_position",
+                            "connesso" if position.is_valid and position.fix_quality > 0 else "ricerca segnale",
                             "Posizione GPS aggiornata",
                             gps_data
                         )
-                    logger.info(f"📍 GPS: {position.latitude:.6f}, {position.longitude:.6f} "
-                               f"(Sat: {position.satellites}, HDOP: {position.hdop:.1f})")
+                    logger.info(f"📍 GPS: {float(position.latitude):.6f}, {float(position.longitude):.6f} "
+                               f"(Sat: {int(position.satellites)}, HDOP: {float(position.hdop):.1f})")
             else:
                 # Log debug per posizioni non inviate (solo se valide)
                 if position.is_valid and position.fix_quality > 0:
-                    logger.debug(f"📍 GPS (throttled): {position.latitude:.6f}, {position.longitude:.6f} "
-                               f"(Sat: {position.satellites}, HDOP: {position.hdop:.1f})")
+                    logger.debug(f"📍 GPS (throttled): {float(position.latitude):.6f}, {float(position.longitude):.6f} "
+                               f"(Sat: {int(position.satellites)}, HDOP: {float(position.hdop):.1f})")
             
         except Exception as e:
             logger.error(f"Errore callback GPS posizione: {e}")
@@ -329,17 +367,24 @@ class MicroNavSystem:
             # Aggiorna statistiche MQTT
             self._update_mqtt_system_stats()
             
-            # Pubblica status GPS via MQTT
-            self._safe_publish_status(
-                "gps_status",
-                f"GPS {status.value}",
-                f"GPS {status.value}",
-                {
-                    'status': status.value,
-                    'has_fix': self.system_stats['gps_fix'],
-                    'connected': self.system_stats['gps_connected']
-                }
-            )
+            # Pubblica status GPS via MQTT (solo se MQTT è disponibile)
+            if self.mqtt_client and hasattr(self.mqtt_client, 'topics') and self.mqtt_client.topics:
+                gps_status_topic = self.mqtt_client.topics.get('publish', {}).get('gps_status')
+                if gps_status_topic:
+                    self._safe_publish_status(
+                        gps_status_topic,
+                        f"GPS {status.value}",
+                        f"GPS {status.value}",
+                        {
+                            'status': status.value,
+                            'has_fix': self.system_stats['gps_fix'],
+                            'connected': self.system_stats['gps_connected']
+                        }
+                    )
+                else:
+                    logger.debug(f"Topic GPS status non disponibile, salto pubblicazione")
+            else:
+                logger.debug(f"MQTT client non disponibile, salto pubblicazione GPS status")
             
         except Exception as e:
             logger.error(f"Errore callback GPS status: {e}")
@@ -347,8 +392,29 @@ class MicroNavSystem:
     def _handle_route_data(self, topic: str, data: Dict[str, Any]):
         """Gestisce dati percorso completo"""
         try:
+
+            if data.get('message') == 'route aborted':
+                logger.warning("⚠️ Percorso annullato. Mostra schermata idle.")
+                if self.display_controller.display_state['current_screen'] != 'idle':
+                    logger.warning("⚠️ Percorso annullato. Mostra schermata idle.")
+                    self.display_controller.show_idle_screen()
+                return
+            
             logger.info(f"📍 Percorso ricevuto: {data.get('origin', 'N/A')} → {data.get('destination', 'N/A')}")
             
+            # Controlla se il percorso è più vecchio di 1 ora
+            route_timestamp = data.get('timestamp')
+            if route_timestamp:
+                current_timestamp = get_timestamp_ms()
+                time_diff_ms = current_timestamp - route_timestamp
+                time_diff_hours = time_diff_ms / (1000 * 60 * 60)  # Converti millisecondi in ore
+                
+                if time_diff_hours >= 1.0:
+                    logger.warning(f"⚠️ Percorso troppo vecchio ({time_diff_hours:.2f} ore). Ignorato e mantenuta schermata idle.")
+                    return
+            else:
+                logger.warning("⚠️ Percorso senza timestamp. Ignorato e mantenuta schermata idle.")
+                return
             # Pulisci il display prima di mostrare il nuovo percorso
             logger.debug("Pulizia display per nuovo percorso")
             self.display_controller.clear_display()
@@ -548,9 +614,9 @@ class MicroNavSystem:
     def _handle_gps_position(self, topic: str, data: Dict[str, Any]):
         """Gestisce posizione GPS"""
         try:
-            lat = data.get('latitude', 0)
-            lon = data.get('longitude', 0)
-            accuracy = data.get('accuracy', 0)
+            lat = float(data.get('latitude', 0))
+            lon = float(data.get('longitude', 0))
+            accuracy = float(data.get('accuracy', 0))
             
             logger.debug(f"📍 GPS: {lat:.6f}, {lon:.6f} (±{accuracy}m)")
             
@@ -585,7 +651,7 @@ class MicroNavSystem:
                     'display': self.system_stats['display_active']
                 },
                 'statistics': stats_copy,
-                'timestamp': int(time.time())
+                'timestamp': get_timestamp_ms()
             }
             
             self._safe_publish_status(
@@ -603,7 +669,7 @@ class MicroNavSystem:
     def _test_display(self):
         """Test del display"""
         try:
-            logger.info("🧪 Avvio test display...")
+            logger.debug("🧪 Avvio test display...")
             
             # Test istruzione
             test_instruction = {
@@ -702,6 +768,7 @@ class MicroNavSystem:
         """Pubblica heartbeat del sistema"""
         try:
             if self.mqtt_client and self.mqtt_client.is_connected:
+                logger.info("Aggiorno heartbeat")
                 self._safe_publish_status(
                     self.mqtt_client.topics['publish']['status'],
                     "online",
@@ -712,11 +779,6 @@ class MicroNavSystem:
                         'errors_count': self.system_stats['errors_count'],
                         'gps_connected': self.system_stats.get('gps_connected', False),
                         'gps_fix': self.system_stats.get('gps_fix', False),
-                        'current_position': {
-                            'latitude': self.current_position.latitude if self.current_position else None,
-                            'longitude': self.current_position.longitude if self.current_position else None,
-                            'satellites': self.current_position.satellites if self.current_position else 0
-                        } if self.current_position else None
                     }
                 )
                 
@@ -771,13 +833,6 @@ class MicroNavSystem:
             self.is_running = False
             
             # Ferma componenti
-            if self.mqtt_client:
-                self.mqtt_client.stop()
-                logger.info("✅ MQTT client fermato")
-            
-            # if self.wifi_monitor:
-            #     self.wifi_monitor.stop()
-            #     logger.info("✅ WiFi monitor fermato")
             
             if self.gps_controller:
                 self.gps_controller.disconnect()
@@ -786,11 +841,16 @@ class MicroNavSystem:
             if self.display_controller:
                 self.display_controller.stop()
                 logger.info("✅ Display controller fermato")
+
+
+            if self.mqtt_client:
+                self.mqtt_client.stop()
+                logger.info("✅ MQTT client fermato")
             
             # Attendi thread
             if self.monitor_thread and self.monitor_thread.is_alive():
                 self.monitor_thread.join(timeout=5)
-            
+                
             logger.info("✅ Sistema MicroNav fermato")
             
         except Exception as e:

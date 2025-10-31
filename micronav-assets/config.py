@@ -5,6 +5,7 @@ Contiene tutte le impostazioni per MQTT, display, WiFi e sistema
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from typing import Dict, Any
 
@@ -86,7 +87,9 @@ def get_mqtt_topics(device_id: str = None) -> Dict[str, Any]:
 MQTT_TOPICS = get_mqtt_topics()
 
 # Configurazione Display TFT ST7789V3 1.47" Waveshare
-# da specifiche è 320x172, ma il alla fine la corretta risoluzione del display è 320x240. non so dire perchè.
+# da specifiche è 320x172, ma il alla fine la corretta
+# risoluzione è 320x240. non so dire perchè.
+
 DISPLAY_CONFIG = {
     'width': 320,           # Risoluzione orizzontale (H)RGB
     'height': 240,          # Risoluzione verticale (V)
@@ -98,7 +101,8 @@ DISPLAY_CONFIG = {
     'bgr': True,            # BGR=True per ST7789V3 (formato colore)
     'invert': False,        # Non invertire colori
     'h_offset': 0,          # Offset orizzontale
-    'v_offset': 0           # Offset verticale
+    'v_offset': 0,          # Offset verticale
+    'brightness': 30        # Brightness del display (0-100)
 }
 
 # Configurazione GPIO per Display ST7789V3 1.47" Waveshare
@@ -228,9 +232,13 @@ def get_wifi_config() -> Dict[str, Any]:
     """Restituisce la configurazione WiFi"""
     return WIFI_CONFIG.copy()
 
-def get_topics_config(device_id: str = None) -> Dict[str, Any]:
+def get_mqtt_config(device_id: str = None) -> Dict[str, Any]:
     """Restituisce la configurazione topics MQTT"""
     return get_mqtt_topics(device_id)
+
+def get_gps_config() -> Dict[str, Any]:
+    """Restituisce la configurazione GPS"""
+    return GPS_CONFIG.copy()
 
 def get_colors_config() -> Dict[str, tuple]:
     """Restituisce la configurazione colori"""
@@ -252,9 +260,24 @@ def get_logging_config() -> Dict[str, Any]:
     """Restituisce la configurazione logging"""
     return LOGGING_CONFIG.copy()
 
-def get_gps_config() -> Dict[str, Any]:
-    """Restituisce la configurazione GPS"""
-    return GPS_CONFIG.copy()
+
+def get_timestamp_ms() -> int:
+    """
+    Restituisce un timestamp Unix in millisecondi (13 cifre).
+    
+    Standard unico per tutti i timestamp nel progetto MicroNav.
+    Compatibile con JavaScript Date.now() (13 cifre).
+    
+    Returns:
+        int: Timestamp Unix in millisecondi (es. 1640995200000)
+        
+    Example:
+        >>> timestamp = get_timestamp_ms()
+        >>> len(str(timestamp))  # Sempre 13 cifre
+        13
+    """
+    return int(time.time() * 1000)
+
 
 def validate_config() -> bool:
     """Valida la configurazione"""
@@ -321,14 +344,3 @@ def print_config_summary():
     print(f"  Path: {SYSTEM_CONFIG['base_path']}")
     
     print("=" * 60)
-
-if __name__ == "__main__":
-    print_config_summary()
-    
-    print("\n🔍 Validazione configurazione...")
-    if validate_config():
-        print("✅ Configurazione valida!")
-    else:
-        print("❌ Configurazione non valida!")
-        print("\nModifica i valori in config.py per correggere gli errori.")
-
