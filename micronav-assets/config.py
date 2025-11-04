@@ -72,14 +72,16 @@ def get_mqtt_topics(device_id: str = None) -> Dict[str, Any]:
             'route_data': f"{base_topic}/route/data",
             'route_step': f"{base_topic}/route/step", 
             'commands': f"{base_topic}/commands",
-            'gps_position': f"{base_topic}/position"
+            'gps_position': f"{base_topic}/position",
+            'pwa_position': f"micronav/pwa/{device_id}/position"  # Posizione PWA (fallback speedcam)
         },
         'publish': {
             'status': f"{base_topic}/status",
             'network_ip': f"{base_topic}/status/ip",
             'connections': f"{base_topic}/status/connections",
             'display_current': f"{base_topic}/display/current",
-            'gps_position': f"{base_topic}/position"
+            'gps_position': f"{base_topic}/position",
+            'speedcam_detected': f"{base_topic}/speedcam/detected"
         }
     }
 
@@ -125,6 +127,8 @@ COLORS = {
     'black': (0, 0, 0),
     'white': (255, 255, 255),
     'red': (255, 0, 0),
+    'micronav_red': (194, 24, 61),
+    'micronav_red_20': (194, 24, 61, 25),
     'green': (0, 255, 0),
     'blue': (0, 0, 255),
     'yellow': (255, 255, 0),
@@ -169,7 +173,8 @@ BOOT_IMAGE_CONFIG = {
 }
 DIRECTIONS_ICONS_CONFIG = {
     'path': BASE_PATH + '/micronav-assets/directions-icons/src/png/light',
-    'size': 128
+    'size': 128,
+    'icon_traffic_light': BASE_PATH + '/micronav-assets/speedcams/traffic-light.png'
 }
 
 
@@ -184,6 +189,14 @@ GPS_CONFIG = {
     'min_satellites': 4,           # Numero minimo satelliti per fix
     'max_hdop': 5.0,               # HDOP massimo accettabile
     'auto_configure': True         # Configurazione automatica al avvio
+}
+
+# Configurazione Speedcam
+SPEEDCAM_CONFIG = {
+    'json_path': BASE_PATH + '/micronav-assets/speedcams/json/SCDB-Northern-Italy_cleaned.json',
+    'detection_radius': 1000,      # Raggio di rilevazione in metri (default 1km)
+    'check_interval': 5.0,         # Intervallo tra check in secondi (evita check troppo frequenti)
+    'enabled': True                 # Abilita rilevazione speedcam
 }
 
 # Configurazione Logging
@@ -207,6 +220,7 @@ def get_config() -> Dict[str, Any]:
         'gpio': GPIO_CONFIG,
         'wifi': WIFI_CONFIG,
         'gps': GPS_CONFIG,
+        'speedcam': SPEEDCAM_CONFIG,
         'topics': MQTT_TOPICS,
         'colors': COLORS,
         'fonts': FONT_CONFIG,
@@ -239,6 +253,10 @@ def get_mqtt_config(device_id: str = None) -> Dict[str, Any]:
 def get_gps_config() -> Dict[str, Any]:
     """Restituisce la configurazione GPS"""
     return GPS_CONFIG.copy()
+
+def get_speedcam_config() -> Dict[str, Any]:
+    """Restituisce la configurazione Speedcam"""
+    return SPEEDCAM_CONFIG.copy()
 
 def get_colors_config() -> Dict[str, tuple]:
     """Restituisce la configurazione colori"""

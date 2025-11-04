@@ -37,6 +37,14 @@ class MicroNavDisplayController:
         self.is_initialized = False
         self.current_instruction = None
         self.current_route = None
+        self.current_speedcam = None  # Dati speedcam corrente
+        self.current_speedcam_distance = None  # Distanza speedcam corrente
+        self.current_connection_status = {  # Stato connessioni (overlay)
+            'wifi_connected': False,
+            'mqtt_connected': False,
+            'gps_connected': False,
+            'gps_has_fix': False
+        }
         self.display_thread = None
         self.running = False
         
@@ -485,6 +493,17 @@ class MicroNavDisplayController:
                 
                 with canvas(self.device) as draw:
                     self._draw_idle_content(draw)
+                    
+                    # Disegna overlay speedcam se presente e permesso (non cambia current_screen)
+                    if (self.current_speedcam and self.current_speedcam_distance is not None and 
+                        self._should_show_speedcam_overlay()):
+                        self._draw_speedcam_alert_content(draw, self.current_speedcam, self.current_speedcam_distance)
+                    
+                    # Disegna sempre gli indicatori di connessione (overlay)
+                    status = self.current_connection_status
+                    self._draw_wifi_indicator(draw, status.get('wifi_connected', False))
+                    self._draw_mqtt_indicator(draw, status.get('mqtt_connected', False))
+                    self._draw_gps_indicator(draw, status.get('gps_connected', False), status.get('gps_has_fix', False))
                 
                 # Salva l'immagine corrente per aggiornamenti parziali
                 # Per la schermata idle non è critico, ma manteniamo coerenza
@@ -557,11 +576,6 @@ class MicroNavDisplayController:
                 self._save_current_display()
 
             
-            # Indicatori di stato
-            # self._draw_wifi_indicator(draw, True)
-            # self._draw_mqtt_indicator(draw, True)
-            # self._draw_gps_indicator(draw, True, False)
-            
         except Exception as e:
             logger.error(f"Errore disegno contenuto navigazione: {e}")
 
@@ -573,10 +587,6 @@ class MicroNavDisplayController:
         
         with self.display_lock:
             try:
-                # Pulisci lo schermo prima di mostrare la panoramica
-                # logger.debug("Pulizia schermo prima di panoramica")
-                # self.clear_display()
-                # time.sleep(0.3)  # Piccola pausa per assicurarsi che la pulizia sia completata
                 
                 origin = route_data.get('origin', '')
                 destination = route_data.get('destination', '')
@@ -589,6 +599,12 @@ class MicroNavDisplayController:
                 
                 with canvas(self.device) as draw:
                     self._draw_route_overview_content(draw, route_data)
+                    
+                    # Disegna sempre gli indicatori di connessione (overlay)
+                    status = self.current_connection_status
+                    self._draw_wifi_indicator(draw, status.get('wifi_connected', False))
+                    self._draw_mqtt_indicator(draw, status.get('mqtt_connected', False))
+                    self._draw_gps_indicator(draw, status.get('gps_connected', False), status.get('gps_has_fix', False))
                 
                 # Salva l'immagine corrente per aggiornamenti parziali (DOPO il disegno)
                 # Questo deve essere fatto immediatamente per evitare che update_connections_status
@@ -613,11 +629,9 @@ class MicroNavDisplayController:
             total_duration = route_data.get('totalDuration', 0)
             steps = route_data.get('steps', [])
             
-            # Verifica che i font siano caricati
-            if not self.fonts_sm['small'] or not self.fonts_sm['large']:
-                logger.warning("Font non caricati correttamente, uso font predefinito")
-                self.fonts_sm['small'] = ImageFont.load_default()
-                self.fonts_sm['large'] = ImageFont.load_default()
+            # (RI)Carica font se necessario
+            if not self.fonts_sys['large'] or not self.fonts_sys['medium'] or not self.fonts_sys['small']:
+                self._load_fonts()
             
             # Sfondo
             draw.rectangle(
@@ -627,7 +641,7 @@ class MicroNavDisplayController:
             
             # Titolo
             draw.text(
-                (10, 5),
+                (10, 15),
                 "Percorso",
                 font=self.fonts_sm['large'],
                 fill=self.colors['white']
@@ -635,7 +649,7 @@ class MicroNavDisplayController:
             
             # Origine
             draw.text(
-                (10, 35),
+                (10, 45),
                 "Da:",
                 font=self.fonts_sys['medium'],
                 fill=self.colors['light_gray']
@@ -645,7 +659,7 @@ class MicroNavDisplayController:
             self._draw_wrapped_text(
                 draw,
                 origin_short,
-                (10, 50),
+                (10, 60),
                 self.config['width'] - 20,
                 self.fonts_sys['medium'],
                 self.colors['white']
@@ -653,7 +667,7 @@ class MicroNavDisplayController:
             
             # Destinazione
             draw.text(
-                (10, 90),
+                (10, 100),
                 "A:",
                 font=self.fonts_sys['medium'],
                 fill=self.colors['light_gray']
@@ -663,7 +677,7 @@ class MicroNavDisplayController:
             self._draw_wrapped_text(
                 draw,
                 destination_short,
-                (10, 105),
+                (10, 115),
                 self.config['width'] - 20,
                 self.fonts_sys['medium'],
                 self.colors['white']
@@ -729,6 +743,16 @@ class MicroNavDisplayController:
                 
                 with canvas(self.device) as draw:
                     self._draw_navigation_content(draw, instruction_data)
+                    
+                    # Disegna overlay speedcam se presente (sempre visibile sopra navigation)
+                    if self.current_speedcam and self.current_speedcam_distance is not None:
+                        self._draw_speedcam_alert_content(draw, self.current_speedcam, self.current_speedcam_distance)
+                    
+                    # Disegna sempre gli indicatori di connessione (overlay)
+                    status = self.current_connection_status
+                    self._draw_wifi_indicator(draw, status.get('wifi_connected', False))
+                    self._draw_mqtt_indicator(draw, status.get('mqtt_connected', False))
+                    self._draw_gps_indicator(draw, status.get('gps_connected', False), status.get('gps_has_fix', False))
                 
                 # Salva l'immagine corrente per aggiornamenti parziali (DOPO il disegno)
                 # Questo deve essere fatto immediatamente per evitare che update_connections_status
@@ -742,6 +766,210 @@ class MicroNavDisplayController:
                 logger.error(f"   Tipo errore: {type(e).__name__}")
                 import traceback
                 logger.error(f"   Traceback: {traceback.format_exc()}")
+    
+    def _should_show_speedcam_overlay(self) -> bool:
+        """
+        Determina se l'overlay speedcam dovrebbe essere mostrato
+        
+        Regole:
+        - NON mostrare sopra route_overview
+        - Sempre mostrare sopra navigation
+        - Mostrare sopra idle solo se non c'è un percorso impostato
+        
+        Returns:
+            bool: True se l'overlay dovrebbe essere mostrato
+        """
+        current_screen = self.display_state.get('current_screen', 'idle')
+        
+        # NON mostrare mai sopra route_overview
+        if current_screen == 'route_overview':
+            return False
+        
+        # Sempre mostrare sopra navigation
+        if current_screen == 'navigation':
+            return True
+        
+        # Mostrare sopra idle solo se non c'è un percorso impostato
+        if current_screen == 'idle':
+            return self.current_route is None
+        
+        # Default: non mostrare
+        return False
+    
+    def show_speedcam_alert(self, speedcam_data: Dict[str, Any], distance: float):
+        """
+        Mostra alert speedcam come overlay sopra la schermata corrente
+        
+        Args:
+            speedcam_data: Dati speedcam rilevata
+            distance: Distanza dalla speedcam in metri
+        """
+        if not self.is_initialized:
+            logger.error("Display non inizializzato per mostrare alert speedcam")
+            return
+        
+        with self.display_lock:
+            try:
+                logger.debug(f"Inizio visualizzazione alert speedcam overlay - Distanza: {distance:.0f}m")
+                
+                # Salva i dati speedcam per poterli ridisegnare se necessario
+                self.current_speedcam = speedcam_data
+                self.current_speedcam_distance = distance
+                
+                # NON cambiare current_screen - l'alert è un overlay
+                self.display_state['last_update'] = datetime.now()
+                
+                # Verifica se dovremmo mostrare l'overlay
+                if not self._should_show_speedcam_overlay():
+                    logger.debug("Overlay speedcam non mostrato: regole di visualizzazione non soddisfatte")
+                    return
+                
+                # Ridisegna la schermata corrente + overlay alert
+                with canvas(self.device) as draw:
+                    # Prima disegna la schermata corrente
+                    current_screen = self.display_state.get('current_screen', 'idle')
+                    if current_screen == 'idle':
+                        self._draw_idle_content(draw)
+                    elif current_screen == 'navigation':
+                        self._draw_navigation_content(draw, safe_mode=True)
+                    elif current_screen == 'route_overview':
+                        self._draw_route_overview_content(draw, safe_mode=True)
+                    else:
+                        # Default: idle screen
+                        self._draw_idle_content(draw)
+                    
+                    # Poi disegna l'alert sopra (overlay) se permesso
+                    if self._should_show_speedcam_overlay():
+                        self._draw_speedcam_alert_content(draw, speedcam_data, distance)
+                    
+                    # Disegna sempre gli indicatori di connessione (overlay)
+                    status = self.current_connection_status
+                    self._draw_wifi_indicator(draw, status.get('wifi_connected', False))
+                    self._draw_mqtt_indicator(draw, status.get('mqtt_connected', False))
+                    self._draw_gps_indicator(draw, status.get('gps_connected', False), status.get('gps_has_fix', False))
+                
+                # Salva l'immagine corrente per aggiornamenti parziali
+                self._save_current_display()
+                
+                logger.debug(f"✅ Alert speedcam overlay visualizzato correttamente - Distanza: {distance:.0f}m")
+                
+            except Exception as e:
+                logger.error(f"❌ Errore visualizzazione alert speedcam: {e}")
+                logger.error(f"   Tipo errore: {type(e).__name__}")
+                import traceback
+                logger.error(f"   Traceback: {traceback.format_exc()}")
+    
+    def _draw_speedcam_alert_content(self, draw, speedcam_data: Dict[str, Any], distance: float):
+        """
+        Disegna il contenuto dell'alert speedcam
+        
+        Args:
+            draw: Oggetto canvas per disegnare
+            speedcam_data: Dati speedcam
+            distance: Distanza dalla speedcam in metri
+        """
+
+        # (RI)Carica font se necessario
+        if not self.fonts_sys['large'] or not self.fonts_sys['medium'] or not self.fonts_sys['small']:
+            self._load_fonts()
+
+        try:
+            alert_width = (self.config['width'] / 2)
+            alert_height = 160
+            
+            # Bordo rosso per il riquadro di avviso (colore di allerta)
+            # Use rounded_rectangle if available (Pillow >=8.2.0), else fallback to rectangle
+            draw.rounded_rectangle([(0, 60), (alert_width, alert_height)], radius=8, fill=self.colors['micronav_red_20'], outline=self.colors['micronav_red'], width=2)
+                        
+            # Tipo e limite velocità
+            speedcam_type = speedcam_data.get('type', '?')
+            speedcam_vmax = speedcam_data.get('vmax', '?')
+            speedcam_status = speedcam_data.get('status', False)
+            
+            # Tipo speedcam e stato attivo/inattivo
+            type_text = "T RED" if speedcam_type == "A" else "VELOX"
+            type_status = "attivo" if speedcam_status else "inattivo"
+            
+            txt_margin_x = 10
+            txt_margin_y = 70
+            if self.fonts_sys['medium']:
+                bbox = draw.textbbox((0, 0), type_text, font=self.fonts_sys['medium'])
+                type_width = bbox[2] - bbox[0]
+                draw.text((txt_margin_x, txt_margin_y), type_text, font=self.fonts_sys['medium'], fill=self.colors['white'])
+
+            txt_margin_y = 90
+            if self.fonts_sys['small']:
+                bbox = draw.textbbox((0, 0), type_status, font=self.fonts_sys['small'])
+                type_status_width = bbox[2] - bbox[0]
+                draw.text((txt_margin_x, txt_margin_y), type_status, font=self.fonts_sys['small'], fill=self.colors['white'])
+            
+            # Distanza (in grande)
+            distance_text = f"{int(distance)}m"
+            txt_margin_y = 110
+            if self.fonts_sys['large']:
+                bbox = draw.textbbox((0, 0), distance_text, font=self.fonts_sys['large'])
+                distance_width = bbox[2] - bbox[0]
+                draw.text((txt_margin_x, txt_margin_y), distance_text, font=self.fonts_sys['large'], fill=self.colors['white'])
+                        
+            # Indicatore visivo (cerchio o simbolo)
+            indicator_size = 50
+            indicator_x = alert_width - indicator_size // 2 - 10
+            indicator_y = 95
+            # Disegna cerchio di avviso
+            draw.ellipse(
+                [(indicator_x - indicator_size // 2, indicator_y - indicator_size // 2),
+                 (indicator_x + indicator_size // 2, indicator_y + indicator_size // 2)],
+                outline=self.colors['red'],
+                fill=self.colors['white'],
+                width=5
+            )
+            # Mostra il limite di velocità (speedcam_vmax) centrato nel cerchio di avviso, se presente e valido
+            if speedcam_type == 'A':
+                # Mostra l'icona del semaforo nel cerchio per speedcam tipo "A"
+                try:
+                    from PIL import Image
+                    traffic_light_path = self.directions_icons_config['icon_traffic_light']
+                    icon_size = indicator_size - 12  # un po' più piccolo del cerchio
+                    icon_x = indicator_x - icon_size // 2
+                    icon_y = indicator_y - icon_size // 2
+
+                    # Carica e ridimensiona l'icona
+                    icon_img = Image.open(traffic_light_path).convert("RGBA")
+                    icon_img = icon_img.resize((icon_size, icon_size), Image.LANCZOS)
+
+                    # Pastes the icon onto the displayed image, handling possible type of 'draw'
+                    # Pastes the icon onto the displayed image, handling possible type of 'draw'
+                    if hasattr(draw, 'im') and hasattr(draw.im, 'paste'):
+                        box = (icon_x, icon_y, icon_x + icon_size, icon_y + icon_size)
+                        draw.im.paste(icon_img, box, icon_img)
+                    elif hasattr(draw, 'image') and hasattr(draw.image, 'paste'):
+                        box = (icon_x, icon_y, icon_x + icon_size, icon_y + icon_size)
+                        draw.image.paste(icon_img, box, icon_img)
+                except Exception as e:
+                    logger.error(f"Errore caricamento icona semaforo: {e}")
+
+            elif speedcam_type.startswith("G") and speedcam_vmax != '/':
+                # mostra Vmax testuale nel cerchio per speedcam tipo "G"
+                vmax_text = str(speedcam_vmax)
+                if self.fonts_sys['medium']:
+                    bbox = draw.textbbox((0, 0), vmax_text, font=self.fonts_sys['medium'])
+                    vmax_text_width = bbox[2] - bbox[0]
+                    vmax_text_height = bbox[3] - bbox[1]
+                    vmax_x = indicator_x - vmax_text_width // 2
+                    vmax_y = indicator_y - vmax_text_height
+                    draw.text((vmax_x, vmax_y), vmax_text, font=self.fonts_sys['medium'], fill=self.colors['black'])
+            else:
+                vmax_text = "!"
+                if self.fonts_sys['medium']:
+                    bbox = draw.textbbox((0, 0), vmax_text, font=self.fonts_sys['medium'])
+                    vmax_text_width = bbox[2] - bbox[0]
+                    vmax_text_height = bbox[3] - bbox[1]
+                    vmax_x = indicator_x - vmax_text_width // 2
+                    vmax_y = indicator_y - vmax_text_height
+                    draw.text((vmax_x, vmax_y), vmax_text, font=self.fonts_sys['medium'], fill=self.colors['black'])
+
+        except Exception as e:
+            logger.error(f"Errore disegno alert speedcam: {e}")
     
     def _draw_wrapped_text(self, draw, text: str, position: Tuple[int, int], 
                           max_width: int, font, color):
@@ -881,6 +1109,11 @@ class MicroNavDisplayController:
 ### Schermate di stato delle connessioni
 
     def _draw_wifi_indicator(self, draw, connected: bool):
+
+        # (RI)Carica font se necessario
+        if not self.fonts_sm['small']:
+            self._load_fonts()
+
         """Disegna indicatore WiFi"""
         try:
             x = 10
@@ -901,6 +1134,11 @@ class MicroNavDisplayController:
             logger.error(f"Errore indicatore WiFi: {e}")
     
     def _draw_mqtt_indicator(self, draw, connected: bool):
+
+        # (RI)Carica font se necessario
+        if not self.fonts_sm['small']:
+            self._load_fonts()
+
         """Disegna indicatore MQTT"""
         try:
             x = 65
@@ -921,6 +1159,11 @@ class MicroNavDisplayController:
             logger.error(f"Errore indicatore MQTT: {e}")
     
     def _draw_gps_indicator(self, draw, connected: bool, has_fix: bool):
+
+        # (RI)Carica font se necessario
+        if not self.fonts_sm['small']:
+            self._load_fonts()
+
         """Disegna indicatore GPS"""
         try:
             x = 120
@@ -946,66 +1189,50 @@ class MicroNavDisplayController:
             logger.error(f"Errore indicatore MQTT: {e}")
 
     def update_connections_status(self, wifi_connected: bool, mqtt_connected: bool, gps_connected: bool, gps_has_fix: bool):
-        """Aggiorna solo l'indicatore WIFI, MQTT e GPS senza ridisegnare tutto lo schermo"""
+        """Aggiorna gli indicatori di connessione come overlay (sempre visibili su tutte le schermate)"""
         if not self.is_initialized:
             return
         
         with self.display_lock:
             try:
-                # Se non abbiamo un'immagine corrente, ridisegna tutto
-                if self.current_display_image is None:
-                    logger.debug("Nessuna immagine corrente, ridisegno completo")
-                    with canvas(self.device) as draw:
-                        # Ridisegna tutto lo schermo basandosi sullo stato corrente
-                        if self.display_state['current_screen'] == 'idle':
-                            self._draw_idle_content(draw)
-                        elif self.display_state['current_screen'] == 'navigation':
-                            self._draw_navigation_content(draw)
-                        elif self.display_state['current_screen'] == 'route_overview':
-                            self._draw_route_overview_content(draw)
-                        
-                        # Aggiorna l'indicatore WIFI, MQTT e GPS
-                        self._draw_wifi_indicator(draw, wifi_connected)
-                        self._draw_mqtt_indicator(draw, mqtt_connected)
-                        self._draw_gps_indicator(draw, gps_connected, gps_has_fix)
+                # Salva lo stato corrente delle connessioni (come overlay)
+                self.current_connection_status = {
+                    'wifi_connected': wifi_connected,
+                    'mqtt_connected': mqtt_connected,
+                    'gps_connected': gps_connected,
+                    'gps_has_fix': gps_has_fix
+                }
+                
+                # Ridisegna la schermata corrente con overlay indicatori
+                with canvas(self.device) as draw:
+                    # Prima disegna la schermata corrente
+                    current_screen = self.display_state.get('current_screen', 'idle')
+                    if current_screen == 'idle':
+                        self._draw_idle_content(draw)
+                    elif current_screen == 'navigation':
+                        self._draw_navigation_content(draw, safe_mode=True)
+                    elif current_screen == 'route_overview':
+                        self._draw_route_overview_content(draw, safe_mode=True)
+                    else:
+                        self._draw_idle_content(draw)
                     
-                    # Salva l'immagine corrente
-                    self._save_current_display()
-                    return
-                
-                # Aggiornamento parziale: modifica solo l'area WIFI, MQTT e GPS
-                logger.debug("Aggiornamento parziale indicatore WIFI, MQTT e GPS")
-                
-                # Crea un canvas temporaneo per disegnare solo l'indicatore WIFI, MQTT e GPS
-                temp_image = self.current_display_image.copy()
-                temp_draw = ImageDraw.Draw(temp_image)
-                
-                    # Disegna solo l'indicatore WIFI, MQTT e GPS sull'immagine esistente
-                self._draw_wifi_indicator(temp_draw, wifi_connected)
-                self._draw_mqtt_indicator(temp_draw, mqtt_connected)
-                self._draw_gps_indicator(temp_draw, gps_connected, gps_has_fix)
-               
-                # Aggiorna il buffer e il display
-                self.current_display_image = temp_image
-                self._update_display_from_buffer()
+                    # Disegna overlay speedcam se presente e permesso
+                    if (self.current_speedcam and self.current_speedcam_distance is not None and 
+                        self._should_show_speedcam_overlay()):
+                        self._draw_speedcam_alert_content(draw, self.current_speedcam, self.current_speedcam_distance)
                     
+                    # Disegna sempre gli indicatori di connessione (overlay)
+                    self._draw_wifi_indicator(draw, wifi_connected)
+                    self._draw_mqtt_indicator(draw, mqtt_connected)
+                    self._draw_gps_indicator(draw, gps_connected, gps_has_fix)
+                
+                # Salva l'immagine corrente
+                self._save_current_display()
+                
             except Exception as e:
-                logger.error(f"Errore aggiornamento status WIFI, MQTT e GPS: {e}")
-                # Fallback: ridisegna tutto
-                try:
-                    with canvas(self.device) as draw:
-                        if self.display_state['current_screen'] == 'idle':
-                            self._draw_idle_content(draw)
-                        elif self.display_state['current_screen'] == 'navigation':
-                            self._draw_navigation_content(draw)
-                        elif self.display_state['current_screen'] == 'route_overview':
-                            self._draw_route_overview_content(draw)
-                        self._draw_wifi_indicator(draw, wifi_connected)
-                        self._draw_mqtt_indicator(draw, mqtt_connected)
-                        self._draw_gps_indicator(draw, gps_connected, gps_has_fix)
-                    self._save_current_display()
-                except Exception as fallback_error:
-                    logger.error(f"Errore anche nel fallback: {fallback_error}")
+                logger.error(f"Errore aggiornamento status connessioni: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
     
 
 
@@ -1018,7 +1245,7 @@ class MicroNavDisplayController:
             temp_image = Image.new('RGB', (self.config['width'], self.config['height']), self.colors['black'])
             temp_draw = ImageDraw.Draw(temp_image)
             
-            # Ridisegna il contenuto corrente basandosi sullo stato
+                    # Ridisegna il contenuto corrente basandosi sullo stato
             # Usa i metodi di disegno in modalità safe per evitare ricorsione
             if self.display_state['current_screen'] == 'idle':
                 self._draw_idle_content(temp_draw)
@@ -1028,6 +1255,17 @@ class MicroNavDisplayController:
             elif self.display_state['current_screen'] == 'route_overview':
                 # Chiama _draw_route_overview_content in modalità safe
                 self._draw_route_overview_content(temp_draw, safe_mode=True)
+            
+            # Disegna overlay speedcam se presente e permesso (non cambia current_screen)
+            if (self.current_speedcam and self.current_speedcam_distance is not None and 
+                self._should_show_speedcam_overlay()):
+                self._draw_speedcam_alert_content(temp_draw, self.current_speedcam, self.current_speedcam_distance)
+            
+            # Disegna sempre gli indicatori di connessione (overlay)
+            status = self.current_connection_status
+            self._draw_wifi_indicator(temp_draw, status.get('wifi_connected', False))
+            self._draw_mqtt_indicator(temp_draw, status.get('mqtt_connected', False))
+            self._draw_gps_indicator(temp_draw, status.get('gps_connected', False), status.get('gps_has_fix', False))
             
             # Salva l'immagine nel buffer
             self.current_display_image = temp_image

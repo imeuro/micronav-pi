@@ -224,6 +224,7 @@ class MicroNavMQTTClient:
             self.topics['subscribe']['route_step'],      # Singola istruzione
             self.topics['subscribe']['commands'],        # Comandi sistema
             self.topics['subscribe']['gps_position'],    # Posizione GPS
+            self.topics['subscribe']['pwa_position'],    # Posizione PWA (fallback speedcam)
         ]
         
         try:
@@ -329,12 +330,12 @@ class MicroNavMQTTClient:
                         current_screen = getattr(self.display_controller, 'display_state', {}).get('current_screen', 'unknown')
                         last_update = getattr(self.display_controller, 'display_state', {}).get('last_update')
                         
-                        # Se siamo in route_overview e l'ultimo aggiornamento è recente (< 2 secondi),
+                        # Se siamo in route_overview o speedcam_alert e l'ultimo aggiornamento è recente (< 2 secondi),
                         # salta l'aggiornamento per evitare interferenze
-                        if (current_screen == 'route_overview' and 
+                        if ((current_screen == 'route_overview' or current_screen == 'speedcam_alert') and 
                             last_update and 
                             (time.time() - last_update.timestamp()) < 2.0):
-                            logger.debug("Route overview attivo, salto aggiornamento indicatori per evitare interferenze")
+                            logger.debug(f"{current_screen} attivo, salto aggiornamento indicatori per evitare interferenze")
                         else:
                             self.display_controller.update_connections_status(
                                 wifi_connected=wifi_status,
@@ -342,7 +343,7 @@ class MicroNavMQTTClient:
                                 gps_connected=gps_status,
                                 gps_has_fix=gps_has_fix
                             )
-                            logger.info(f"🔄 Display aggiornato - WiFi: {wifi_status}, MQTT: {mqtt_status}, GPS: {gps_status}, GPS has fix: {gps_has_fix}")
+                            logger.debug(f"🔄 Display aggiornato - WiFi: {wifi_status}, MQTT: {mqtt_status}, GPS: {gps_status}, GPS has fix: {gps_has_fix}")
                     else:
                         logger.warning("Display controller non trovato, salto aggiornamento indicatori")
                 else:
@@ -384,6 +385,14 @@ class MicroNavMQTTClient:
         """Callback per connessione MQTT"""
         if rc == 0:
             self.is_connected = True
+            # Aggiorna stato connessioni sul display
+            if hasattr(self, 'display_controller'):
+                self.display_controller.update_connections_status(
+                    wifi_connected=self.system_stats.get('wifi_connected', False),
+                    mqtt_connected=True,  # Appena connesso
+                    gps_connected=self.system_stats.get('gps_connected', False),
+                    gps_has_fix=self.system_stats.get('gps_fix', False)
+                )
             self.reconnect_attempts = 0
             self.stats['connection_attempts'] += 1
             logger.info("✅ Connesso al broker MQTT")
@@ -409,7 +418,14 @@ class MicroNavMQTTClient:
         """Callback per disconnessione MQTT"""
         self.is_connected = False
         logger.warning(f"Disconnesso dal broker MQTT: {rc}")
-        
+        # Aggiorna stato connessioni sul display
+        if hasattr(self, 'display_controller'):
+            self.display_controller.update_connections_status(
+                wifi_connected=self.system_stats.get('wifi_connected', False),
+                mqtt_connected=False,
+                gps_connected=self.system_stats.get('gps_connected', False),
+                gps_has_fix=self.system_stats.get('gps_fix', False)
+            )
         # Tentativo di riconnessione automatica
         if self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             self.reconnect_attempts += 1
@@ -439,15 +455,25 @@ class MicroNavMQTTClient:
             base_topic = self.topics['base_topic']
             topic_relative = topic.replace(f"{base_topic}/", "")
             
+            # Cerca handler per topic base
+            handler_found = False
             for pattern, handler in self.message_handlers.items():
                 if pattern in topic_relative:
                     try:
                         handler(topic_relative, data)
+                        handler_found = True
                     except Exception as e:
                         logger.error(f"❌ Errore handler {pattern}: {e}")
                     break
-            else:
-                logger.warning(f"Nessun handler per topic: {topic_relative}")
+            
+            # Se non trovato, controlla se è un topic PWA position (fallback per speedcam)
+            if not handler_found and "micronav/pwa" in topic and "/position" in topic:
+                # Il messaggio verrà gestito dal sistema principale tramite l'handler position
+                # ma lo passiamo anche direttamente se c'è un handler generico
+                logger.debug(f"Topic PWA position ricevuto: {topic}")
+            
+            if not handler_found:
+                logger.debug(f"Nessun handler per topic: {topic_relative or topic}")
             
         except Exception as e:
             logger.error(f"Errore gestione messaggio: {e}")

@@ -313,7 +313,7 @@ class L76KGPSController:
             
             # Numero satelliti (campo 7)
             satellites = int(parts[7]) if parts[7] else 0
-            
+                        
             # HDOP (campo 8)
             hdop = float(parts[8]) if parts[8] else 0.0
             
@@ -354,7 +354,7 @@ class L76KGPSController:
                 self.position.altitude = altitude
                 self.position.is_valid = fix_quality > 0
                 self.last_update = datetime.now()
-                
+                                
                 # Aggiorna stato se abbiamo fix
                 if fix_quality > 0:
                     if self.status != GPSStatus.FIXED:
@@ -495,6 +495,8 @@ class L76KGPSController:
                 self.on_position_update(self.position)
             except Exception as e:
                 logger.error(f"Errore callback posizione: {e}")
+        else:
+            logger.warning("⚠️ on_position_update callback non impostato!")
     
     def _notify_status_change(self):
         """Notifica cambio stato"""

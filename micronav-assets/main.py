@@ -91,6 +91,7 @@ class MicroNavSystem:
         self.display_controller = None
         self.gps_controller = None
         self.wifi_monitor = None
+        self.speedcams_controller = None
         
         # Stato sistema
         self.is_running = False
@@ -212,6 +213,36 @@ class MicroNavSystem:
             mqtt_thread = threading.Thread(target=self._initialize_mqtt_async, daemon=True)
             mqtt_thread.start()
             
+            # Inizializza SpeedCams Controller
+            logger.info("🚨 Inizializzazione SpeedCams controller...")
+            try:
+                speedcam_config = self.config.get('speedcam', {})
+                if speedcam_config.get('enabled', True):
+                    self.speedcams_controller = SpeedCamsController(
+                        gps_controller=self.gps_controller,
+                        mqtt_client=self.mqtt_client,
+                        display_controller=self.display_controller
+                    )
+                    self.speedcams_controller.start()
+                    
+                    # Log stato inizializzazione
+                    stats = self.speedcams_controller.get_stats()
+                    logger.info(f"✅ SpeedCams controller inizializzato - Enabled: {stats.get('enabled')}, Monitoring: {stats.get('is_monitoring')}, Speedcam caricate: {stats.get('speedcams_loaded')}")
+                    
+                    # Verifica stato GPS
+                    if self.gps_controller:
+                        gps_has_fix = self.gps_controller.has_fix()
+                        logger.info(f"📍 GPS status - Has fix: {gps_has_fix}, Connected: {self.gps_controller.is_connected()}")
+                    else:
+                        logger.warning("⚠️  GPS controller non disponibile per SpeedCams")
+                else:
+                    logger.info("⚠️  SpeedCams controller disabilitato in configurazione")
+            except Exception as e:
+                logger.error(f"❌ Errore inizializzazione SpeedCams controller: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                self.speedcams_controller = None
+            
             # Aggiorna stato sistema
             self.system_stats['display_active'] = True
             self.system_stats['wifi_connected'] = True  # Assume sempre connesso
@@ -291,6 +322,9 @@ class MicroNavSystem:
                 self._handle_gps_position
             )
             
+            # Sottoscrizione al topic PWA position verrà fatta in subscribe_to_topics
+            # quando MQTT è connesso. L'handler position gestirà anche i messaggi PWA.
+            
             logger.debug("✅ Handler MQTT registrati")
             
         except Exception as e:
@@ -299,6 +333,8 @@ class MicroNavSystem:
     def _on_gps_position_update(self, position: GPSPosition):
         """Callback per aggiornamento posizione GPS"""
         try:
+            logger.debug(f"📍 GPS position update - valid: {position.is_valid}, fix_quality: {position.fix_quality}, lat: {position.latitude:.6f}, lng: {position.longitude:.6f}")
+            
             # Aggiorna posizione corrente
             self.current_position = position
             
@@ -307,6 +343,14 @@ class MicroNavSystem:
             
             # Aggiorna statistiche MQTT
             self._update_mqtt_system_stats()
+            
+            # Verifica speedcam vicine (se controller è attivo)
+            # Passa la posizione direttamente per evitare deadlock (non chiamare get_position() che richiede il lock)
+            if self.speedcams_controller and self.speedcams_controller.is_monitoring:
+                try:
+                    self.speedcams_controller.check_speedcams(position=position)
+                except Exception as e:
+                    logger.error(f"Errore verifica speedcam: {e}")
             
             # Throttling: invia posizione GPS solo ogni 3 secondi
             current_time = time.time()
@@ -366,7 +410,15 @@ class MicroNavSystem:
             
             # Aggiorna statistiche MQTT
             self._update_mqtt_system_stats()
-            
+
+            # Aggiorna stato connessioni sul display
+            if self.display_controller:
+                self.display_controller.update_connections_status(
+                    wifi_connected=self.system_stats.get('wifi_connected', False),
+                    mqtt_connected=self.system_stats.get('mqtt_connected', False),
+                    gps_connected=self.system_stats.get('gps_connected', False),
+                    gps_has_fix=self.system_stats.get('gps_fix', False)
+                )
             # Pubblica status GPS via MQTT (solo se MQTT è disponibile)
             if self.mqtt_client and hasattr(self.mqtt_client, 'topics') and self.mqtt_client.topics:
                 gps_status_topic = self.mqtt_client.topics.get('publish', {}).get('gps_status')
@@ -395,6 +447,10 @@ class MicroNavSystem:
 
             if data.get('message') == 'route aborted':
                 logger.warning("⚠️ Percorso annullato. Mostra schermata idle.")
+                # Cancella il percorso corrente
+                self.current_route = None
+                if self.display_controller:
+                    self.display_controller.current_route = None
                 if self.display_controller.display_state['current_screen'] != 'idle':
                     logger.warning("⚠️ Percorso annullato. Mostra schermata idle.")
                     self.display_controller.show_idle_screen()
@@ -614,6 +670,18 @@ class MicroNavSystem:
     def _handle_gps_position(self, topic: str, data: Dict[str, Any]):
         """Gestisce posizione GPS"""
         try:
+            # Verifica se è un messaggio PWA position (fallback per speedcam)
+            is_pwa_position = "micronav/pwa" in topic or "pwa" in topic.lower()
+            
+            # Notifica speedcam controller se è un messaggio PWA position
+            if is_pwa_position and self.speedcams_controller:
+                if hasattr(self.speedcams_controller, '_check_mqtt_position_message'):
+                    try:
+                        self.speedcams_controller._check_mqtt_position_message(topic, data)
+                    except Exception as e:
+                        logger.debug(f"Errore notifica posizione PWA a speedcam controller: {e}")
+            
+            # Continua con la gestione normale se necessario
             lat = float(data.get('latitude', 0))
             lon = float(data.get('longitude', 0))
             accuracy = float(data.get('accuracy', 0))
