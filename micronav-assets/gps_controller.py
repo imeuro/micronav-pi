@@ -40,6 +40,7 @@ class GPSPosition:
     fix_quality: int = 0
     timestamp: datetime = None
     is_valid: bool = False
+    is_test: bool = False  # Flag per identificare posizioni di test (simulate)
     
     def __post_init__(self):
         if self.timestamp is None:

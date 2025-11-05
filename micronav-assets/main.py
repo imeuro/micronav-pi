@@ -346,7 +346,7 @@ class MicroNavSystem:
             
             # Verifica speedcam vicine (se controller è attivo)
             # Passa la posizione direttamente per evitare deadlock (non chiamare get_position() che richiede il lock)
-            if self.speedcams_controller and self.speedcams_controller.is_monitoring:
+            if self.speedcams_controller and self.speedcams_controller.is_monitoring:                
                 try:
                     self.speedcams_controller.check_speedcams(position=position)
                 except Exception as e:
@@ -658,7 +658,108 @@ class MicroNavSystem:
                         "brightness_set",
                         f"Luminosità impostata a {brightness}%",
                         {"brightness": brightness}
-                    )                
+                    )
+            
+            elif command == 'test_speedcam':
+                # Test check_speedcams con posizione simulata
+                test_latitude = data.get('latitude')
+                test_longitude = data.get('longitude')
+                
+                if test_latitude is None or test_longitude is None:
+                    logger.warning("🧪 Test speedcam: latitude e longitude richieste")
+                    self._safe_publish_status(
+                        f"micronav/pwa/{self.config['mqtt']['device_id']}/actions",
+                        "test_speedcam_failed",
+                        "Test speedcam fallito: latitude e longitude richieste",
+                        {}
+                    )
+                else:
+                    # Crea posizione GPS simulata
+                    test_position = GPSPosition(
+                        latitude=float(test_latitude),
+                        longitude=float(test_longitude),
+                        altitude=data.get('altitude', 150.0),
+                        speed=data.get('speed', 0.0),
+                        course=data.get('course', 0.0),
+                        satellites=data.get('satellites', 8),
+                        hdop=data.get('hdop', 1.5),
+                        fix_quality=data.get('fix_quality', 1),
+                        timestamp=datetime.now(),
+                        is_valid=True,
+                        is_test=True  # Flag esplicito per identificare posizioni di test
+                    )
+                    
+                    logger.info(f"🧪 Test speedcam: posizione {test_latitude}, {test_longitude}")
+                    
+                    # Chiama check_speedcams con posizione simulata
+                    if self.speedcams_controller:
+                        # Log informazioni diagnostiche
+                        stats = self.speedcams_controller.get_stats()
+                        logger.info(f"🧪 Speedcam controller - Enabled: {stats.get('enabled')}, "
+                                   f"Speedcam caricate: {stats.get('speedcams_loaded')}, "
+                                   f"Raggio: {self.speedcams_controller.radius}m")
+                        
+                        # Trova la speedcam più vicina per debug (anche fuori dal raggio)
+                        closest_info = self._find_closest_speedcam_for_debug(test_position)
+                        if closest_info:
+                            logger.info(f"🧪 Speedcam più vicina: ID {closest_info.get('id')}, "
+                                       f"Distanza: {closest_info.get('distance', 0):.0f}m "
+                                       f"(raggio: {self.speedcams_controller.radius}m)")
+                        
+                        # Imposta flag per ignorare GPS per 15 secondi PRIMA di eseguire il test
+                        # Questo previene che la callback GPS sovrascriva il risultato del test
+                        import time
+                        self.speedcams_controller.ignore_gps_until = time.time() + 15
+                        logger.debug(f"🧪 Ignoro rilevazioni GPS per 15 secondi (test in corso)")
+                        
+                        result = self.speedcams_controller.check_speedcams(position=test_position)
+                        
+                        if result:
+                            logger.warning(
+                                f"🚨 Speedcam rilevata nel test - ID: {result.get('id')}, "
+                                f"Tipo: {result.get('type')}, Limite: {result.get('vmax')} km/h, "
+                                f"Distanza: {result.get('distance', 0):.0f}m"
+                            )
+                            self._safe_publish_status(
+                                f"micronav/pwa/{self.config['mqtt']['device_id']}/actions",
+                                "test_speedcam_detected",
+                                f"Speedcam rilevata: {result.get('type')} - {result.get('distance', 0):.0f}m",
+                                {
+                                    'speedcam': {
+                                        'id': result.get('id'),
+                                        'type': result.get('type'),
+                                        'vmax': result.get('vmax'),
+                                        'distance': result.get('distance', 0),
+                                        'strasse': result.get('strasse', ''),
+                                        'ort': result.get('ort', '')
+                                    },
+                                    'test_position': {
+                                        'latitude': test_latitude,
+                                        'longitude': test_longitude
+                                    }
+                                }
+                            )
+                        else:
+                            logger.info("ℹ️  Nessuna speedcam rilevata nel test")
+                            self._safe_publish_status(
+                                f"micronav/pwa/{self.config['mqtt']['device_id']}/actions",
+                                "test_speedcam_no_detection",
+                                "Nessuna speedcam rilevata nella posizione di test",
+                                {
+                                    'test_position': {
+                                        'latitude': test_latitude,
+                                        'longitude': test_longitude
+                                    }
+                                }
+                            )
+                    else:
+                        logger.error("🧪 Test speedcam fallito: speedcams_controller non disponibile")
+                        self._safe_publish_status(
+                            f"micronav/pwa/{self.config['mqtt']['device_id']}/actions",
+                            "test_speedcam_failed",
+                            "Test speedcam fallito: controller non disponibile",
+                            {}
+                        )
                 
             else:
                 logger.warning(f"Comando sconosciuto: {command}")
@@ -666,6 +767,50 @@ class MicroNavSystem:
         except Exception as e:
             logger.error(f"Errore gestione comando: {e}")
             self.system_stats['errors_count'] += 1
+    
+    def _find_closest_speedcam_for_debug(self, position: GPSPosition) -> Optional[Dict[str, Any]]:
+        """
+        Trova la speedcam più vicina per debug (anche fuori dal raggio)
+        Utile per capire se ci sono speedcam vicine ma troppo lontane
+        """
+        try:
+            if not self.speedcams_controller or not self.speedcams_controller.speedcams:
+                return None
+            
+            from gps_controller import calculate_distance
+            
+            closest_speedcam = None
+            closest_distance = float('inf')
+            
+            for speedcam in self.speedcams_controller.speedcams:
+                try:
+                    sc_lat = speedcam.get('lat')
+                    sc_lng = speedcam.get('lng')
+                    
+                    if sc_lat is None or sc_lng is None:
+                        continue
+                    
+                    distance = calculate_distance(
+                        position.latitude,
+                        position.longitude,
+                        sc_lat,
+                        sc_lng
+                    )
+                    
+                    if distance < closest_distance:
+                        closest_distance = distance
+                        closest_speedcam = speedcam.copy()
+                        closest_speedcam['distance'] = distance
+                        
+                except Exception as e:
+                    logger.debug(f"Errore calcolo distanza speedcam per debug: {e}")
+                    continue
+            
+            return closest_speedcam
+            
+        except Exception as e:
+            logger.error(f"Errore ricerca speedcam più vicina per debug: {e}")
+            return None
     
     def _handle_gps_position(self, topic: str, data: Dict[str, Any]):
         """Gestisce posizione GPS"""

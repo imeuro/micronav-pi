@@ -927,24 +927,22 @@ class MicroNavDisplayController:
             if speedcam_type == 'A':
                 # Mostra l'icona del semaforo nel cerchio per speedcam tipo "A"
                 try:
-                    from PIL import Image
+                    import os
+                    # path  e dimensioni icona semaforo traffic light
                     traffic_light_path = self.directions_icons_config['icon_traffic_light']
-                    icon_size = indicator_size - 12  # un po' più piccolo del cerchio
-                    icon_x = indicator_x - icon_size // 2
-                    icon_y = indicator_y - icon_size // 2
+                    icon_width = 15
+                    icon_height = 35
+                    icon_x = int(indicator_x - icon_width // 2)
+                    icon_y = int(indicator_y - icon_height // 2)
+                    
+                    if os.path.exists(traffic_light_path):
+                        with Image.open(traffic_light_path) as traffic_light_image:
+                            # Ridimensiona l'immagine a icon_width x icon_height prima di incollarla
+                            resized_icon = traffic_light_image.resize((icon_width, icon_height), Image.LANCZOS)
+                            draw._image.paste(resized_icon, (icon_x, icon_y))
+                    else:
+                        logger.error(f"Icona semaforo non trovata: {traffic_light_path}")
 
-                    # Carica e ridimensiona l'icona
-                    icon_img = Image.open(traffic_light_path).convert("RGBA")
-                    icon_img = icon_img.resize((icon_size, icon_size), Image.LANCZOS)
-
-                    # Pastes the icon onto the displayed image, handling possible type of 'draw'
-                    # Pastes the icon onto the displayed image, handling possible type of 'draw'
-                    if hasattr(draw, 'im') and hasattr(draw.im, 'paste'):
-                        box = (icon_x, icon_y, icon_x + icon_size, icon_y + icon_size)
-                        draw.im.paste(icon_img, box, icon_img)
-                    elif hasattr(draw, 'image') and hasattr(draw.image, 'paste'):
-                        box = (icon_x, icon_y, icon_x + icon_size, icon_y + icon_size)
-                        draw.image.paste(icon_img, box, icon_img)
                 except Exception as e:
                     logger.error(f"Errore caricamento icona semaforo: {e}")
 
