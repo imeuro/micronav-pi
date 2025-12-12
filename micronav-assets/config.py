@@ -81,7 +81,10 @@ def get_mqtt_topics(device_id: str = None) -> Dict[str, Any]:
             'connections': f"{base_topic}/status/connections",
             'display_current': f"{base_topic}/display/current",
             'gps_position': f"{base_topic}/position",
-            'speedcam_detected': f"{base_topic}/speedcam/detected"
+            'speedcam_detected': f"{base_topic}/speedcam/detected",
+            'route_current': f"{base_topic}/route/current",
+            'route_deviation': f"{base_topic}/route/deviation",
+            'route_recalculated': f"{base_topic}/route/recalculated"
         }
     }
 
@@ -199,9 +202,26 @@ SPEEDCAM_CONFIG = {
     'enabled': True                 # Abilita rilevazione speedcam
 }
 
+# Configurazione Route Manager (Routing Automatico)
+ROUTE_MANAGER_CONFIG = {
+    'step_update_interval': 5.0,           # Intervallo aggiornamento step in secondi
+    'deviation_threshold_warning': 50.0,    # Soglia warning deviazione in metri
+    'deviation_threshold_recalculate': 100.0 # Soglia per richiesta ricalcolo in metri
+}
+
+# Configurazione API Mapbox per ricalcolo automatico
+MAPBOX_CONFIG = {
+    'access_token': os.getenv('MAPBOX_ACCESS_TOKEN'),
+    'api_base_url': 'https://api.mapbox.com/directions/v5',
+    'routing_profile': 'driving',  # driving, walking, cycling
+    'language': 'it',
+    'timeout': 10.0,  # timeout chiamata API in secondi
+    'enabled': True  # Abilita/disabilita ricalcolo automatico
+}
+
 # Configurazione Logging
 LOGGING_CONFIG = {
-    'level': 'INFO',
+    'level': 'DEBUG',
     'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     'file': BASE_PATH + '/micronav-assets/logs/micronav.log',
     'max_size': 10 * 1024 * 1024,  # 10MB
@@ -221,6 +241,8 @@ def get_config() -> Dict[str, Any]:
         'wifi': WIFI_CONFIG,
         'gps': GPS_CONFIG,
         'speedcam': SPEEDCAM_CONFIG,
+        'route_manager': ROUTE_MANAGER_CONFIG,
+        'mapbox': MAPBOX_CONFIG,
         'topics': MQTT_TOPICS,
         'colors': COLORS,
         'fonts': FONT_CONFIG,
@@ -257,6 +279,14 @@ def get_gps_config() -> Dict[str, Any]:
 def get_speedcam_config() -> Dict[str, Any]:
     """Restituisce la configurazione Speedcam"""
     return SPEEDCAM_CONFIG.copy()
+
+def get_route_manager_config() -> Dict[str, Any]:
+    """Restituisce la configurazione Route Manager"""
+    return ROUTE_MANAGER_CONFIG.copy()
+
+def get_mapbox_config() -> Dict[str, Any]:
+    """Restituisce la configurazione API Mapbox"""
+    return MAPBOX_CONFIG.copy()
 
 def get_colors_config() -> Dict[str, tuple]:
     """Restituisce la configurazione colori"""

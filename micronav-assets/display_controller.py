@@ -194,6 +194,24 @@ class MicroNavDisplayController:
             # Verifica backlight dopo test
             self._ensure_backlight_on()
             
+            # Imposta brightness dalla configurazione (crea PWM se necessario)
+            initial_brightness = self.config.get('brightness', 30)
+            self.set_brightness(initial_brightness)
+            logger.debug(f"💡 Brightness iniziale impostata: {initial_brightness}%")
+            
+            # Piccolo delay per assicurare che il PWM sia attivo
+            time.sleep(0.1)
+            
+            # Forza un refresh del display per assicurarsi che sia visibile
+            if hasattr(self, 'device') and self.device is not None:
+                try:
+                    # Crea un'immagine nera temporanea per forzare il refresh
+                    test_image = Image.new('RGB', (self.config['width'], self.config['height']), color='black')
+                    self.device.display(test_image)
+                    logger.debug("🔄 Display refresh forzato dopo inizializzazione")
+                except Exception as e:
+                    logger.warning(f"⚠️ Errore refresh display: {e}")
+            
             self.is_initialized = True
             logger.debug("✅ Display TFT ST7789 inizializzato con successo")
             return True
@@ -877,9 +895,21 @@ class MicroNavDisplayController:
             alert_width = (self.config['width'] / 2)
             alert_height = 160
             
-            # Bordo rosso per il riquadro di avviso (colore di allerta)
-            # Use rounded_rectangle if available (Pillow >=8.2.0), else fallback to rectangle
-            draw.rounded_rectangle([(0, 60), (alert_width, alert_height)], radius=8, fill=self.colors['micronav_red_20'], outline=self.colors['micronav_red'], width=2)
+            # Possibile idle screen: centro l'alert speedcam sulla schermata idle
+            current_screen = self.display_state.get('current_screen', 'idle')
+            is_idle_screen = current_screen == 'idle'
+            if is_idle_screen:
+                alert_x = (self.config['width'] - alert_width) // 2
+                delta_y = 20
+                draw.rectangle([0,20,self.config['width'],self.config['height']-20], fill=(0, 0, 0, 40))
+            else:
+                alert_x = 0
+                delta_y = 0
+            alert_y = 60
+
+
+            # BordoBOX rosso rounded per il riquadro di avviso (colore di allerta)
+            draw.rounded_rectangle([(alert_x, alert_y + delta_y), (alert_x + alert_width, alert_height + delta_y)], radius=8, fill=self.colors['micronav_red_20'], outline=self.colors['micronav_red'], width=2)
                         
             # Tipo e limite velocità
             speedcam_type = speedcam_data.get('type', '?')
@@ -890,14 +920,14 @@ class MicroNavDisplayController:
             type_text = "T RED" if speedcam_type == "A" else "VELOX"
             type_status = "attivo" if speedcam_status else "inattivo"
             
-            txt_margin_x = 10
-            txt_margin_y = 70
+            txt_margin_x = alert_x + 10
+            txt_margin_y = 70 + delta_y
             if self.fonts_sys['medium']:
                 bbox = draw.textbbox((0, 0), type_text, font=self.fonts_sys['medium'])
                 type_width = bbox[2] - bbox[0]
                 draw.text((txt_margin_x, txt_margin_y), type_text, font=self.fonts_sys['medium'], fill=self.colors['white'])
 
-            txt_margin_y = 90
+            txt_margin_y = 90 + delta_y
             if self.fonts_sys['small']:
                 bbox = draw.textbbox((0, 0), type_status, font=self.fonts_sys['small'])
                 type_status_width = bbox[2] - bbox[0]
@@ -905,7 +935,7 @@ class MicroNavDisplayController:
             
             # Distanza (in grande)
             distance_text = f"{int(distance)}m"
-            txt_margin_y = 110
+            txt_margin_y = 110 + delta_y
             if self.fonts_sys['large']:
                 bbox = draw.textbbox((0, 0), distance_text, font=self.fonts_sys['large'])
                 distance_width = bbox[2] - bbox[0]
@@ -913,8 +943,8 @@ class MicroNavDisplayController:
                         
             # Indicatore visivo (cerchio o simbolo)
             indicator_size = 50
-            indicator_x = alert_width - indicator_size // 2 - 10
-            indicator_y = 95
+            indicator_x = alert_x + alert_width - indicator_size // 2 - 10
+            indicator_y = 95 + delta_y
             # Disegna cerchio di avviso
             draw.ellipse(
                 [(indicator_x - indicator_size // 2, indicator_y - indicator_size // 2),
@@ -1026,21 +1056,32 @@ class MicroNavDisplayController:
         Segue la convenzione del README: direction_{type}_{modifier}.png
         """
         try:
-            maneuver = maneuver_data.get('maneuver', {})
-            maneuver_type = maneuver.get('type', '')
-            modifier = maneuver.get('modifier', '')
-            
-            # Costruisce il nome dell'icona secondo la convenzione
-            if modifier:
-                icon_name = f"direction_{maneuver_type}_{modifier}"
+            # Prova prima a usare il campo 'icon' che arriva già normalizzato dal JavaScript
+            icon_name_raw = maneuver_data.get('icon', '')
+            if icon_name_raw and icon_name_raw != 'unknown':
+                # Il campo icon arriva già normalizzato (es. "end_of_road_right")
+                icon_name = f"direction_{icon_name_raw}"
             else:
-                icon_name = f"direction_{maneuver_type}"
+                # Fallback: costruisci il nome dall'oggetto maneuver
+                maneuver = maneuver_data.get('maneuver', {})
+                maneuver_type = maneuver.get('type', '')
+                modifier = maneuver.get('modifier', '')
+                
+                # Normalizza: sostituisci spazi con underscore
+                maneuver_type = maneuver_type.replace(' ', '_') if maneuver_type else ''
+                modifier = modifier.replace(' ', '_') if modifier else ''
+                
+                # Costruisce il nome dell'icona secondo la convenzione
+                if modifier:
+                    icon_name = f"direction_{maneuver_type}_{modifier}"
+                else:
+                    icon_name = f"direction_{maneuver_type}"
             
             # Path completo dell'icona PNG
             icon_path = f"{self.directions_icons_config['path']}/{icon_name}.png"
             
             logger.debug(f"Path icona costruito: {icon_path}")
-            logger.debug(f"Dati manovra - type: '{maneuver_type}', modifier: '{modifier}'")
+            logger.debug(f"Dati manovra - icon: '{icon_name_raw}', type: '{maneuver_data.get('maneuver', {}).get('type', '')}', modifier: '{maneuver_data.get('maneuver', {}).get('modifier', '')}'")
             
             return icon_path
             
@@ -1337,7 +1378,13 @@ class MicroNavDisplayController:
     def _ensure_backlight_on(self):
         """Forza il backlight acceso e lo mantiene acceso"""
         try:
-            # Riconfigura il pin backlight per essere sicuri
+            # Se il PWM è già stato creato, usa quello invece di GPIO diretto
+            if hasattr(self, 'backlight_pwm') and self.backlight_pwm is not None:
+                # Il PWM gestisce già il backlight, non interferire
+                logger.debug("💡 Backlight gestito da PWM")
+                return
+            
+            # Altrimenti, usa GPIO diretto (solo durante inizializzazione)
             GPIO.setup(self.gpio_config['TFT_BL'], GPIO.OUT)
             GPIO.output(self.gpio_config['TFT_BL'], GPIO.HIGH)
             

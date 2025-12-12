@@ -30,15 +30,15 @@ def setup_logging():
             ]
         )
         
-        # Forza il livello INFO su tutti i logger esistenti e futuri
-        # Questo risolve il problema dei messaggi DEBUG che appaiono nonostante il livello INFO
+        # Usa il livello dalla configurazione per tutti i logger
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
+        log_level = getattr(logging, logging_config['level'], logging.DEBUG)
+        root_logger.setLevel(log_level)
         
-        # Forza il livello INFO su tutti i logger dei moduli
+        # Imposta il livello dalla configurazione su tutti i logger dei moduli
         for logger_name in ['mqtt_client', 'display_controller', 'gps_controller', 'config', '__main__']:
             module_logger = logging.getLogger(logger_name)
-            module_logger.setLevel(logging.INFO)  # Forza INFO invece di NOTSET
+            module_logger.setLevel(log_level)  # Usa il livello dalla configurazione
             module_logger.propagate = True  # Assicura che i messaggi vengano propagati
 
 # Configura il logging PRIMA degli import
@@ -50,25 +50,30 @@ from mqtt_client import MicroNavMQTTClient
 from display_controller import MicroNavDisplayController
 from gps_controller import L76KGPSController, GPSPosition, GPSStatus
 from speedcams.speedcams_controller import SpeedCamsController
+from route_manager import RouteManager
 # from wifi_monitor import MicroNavWiFiMonitor
 
 # Configurazione logging
 logger = logging.getLogger(__name__)
 
-# Forza il livello INFO su tutti i logger dopo gli import
-def force_info_level():
-    """Forza il livello INFO su tutti i logger esistenti"""
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+# Imposta il livello dalla configurazione su tutti i logger dopo gli import
+def set_log_level_from_config():
+    """Imposta il livello dalla configurazione su tutti i logger esistenti"""
+    from config import get_logging_config
+    logging_config = get_logging_config()
+    log_level = getattr(logging, logging_config['level'], logging.DEBUG)
     
-    # Forza INFO su tutti i logger conosciuti
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # Imposta il livello dalla configurazione su tutti i logger conosciuti
     for logger_name in ['mqtt_client', 'display_controller', 'gps_controller', 'config', '__main__']:
         module_logger = logging.getLogger(logger_name)
-        module_logger.setLevel(logging.INFO)
+        module_logger.setLevel(log_level)
         module_logger.propagate = True
 
-# Forza il livello INFO dopo gli import
-force_info_level()
+# Imposta il livello dalla configurazione dopo gli import
+set_log_level_from_config()
 
 class MicroNavSystem:
     """Sistema principale MicroNav Raspberry Pi"""
@@ -92,6 +97,7 @@ class MicroNavSystem:
         self.gps_controller = None
         self.wifi_monitor = None
         self.speedcams_controller = None
+        self.route_manager = None
         
         # Stato sistema
         self.is_running = False
@@ -212,6 +218,17 @@ class MicroNavSystem:
             # Avvia MQTT in thread separato per non bloccare
             mqtt_thread = threading.Thread(target=self._initialize_mqtt_async, daemon=True)
             mqtt_thread.start()
+            
+            # Inizializza Route Manager
+            logger.info("🧭 Inizializzazione Route Manager...")
+            try:
+                self.route_manager = RouteManager(self.config)
+                logger.info("✅ Route Manager inizializzato")
+            except Exception as e:
+                logger.error(f"❌ Errore inizializzazione Route Manager: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                self.route_manager = None
             
             # Inizializza SpeedCams Controller
             logger.info("🚨 Inizializzazione SpeedCams controller...")
@@ -352,6 +369,165 @@ class MicroNavSystem:
                 except Exception as e:
                     logger.error(f"Errore verifica speedcam: {e}")
             
+            # Aggiorna route manager con posizione GPS (routing automatico)
+            logger.debug(f"Route manager check: exists={self.route_manager is not None}, has_route={self.route_manager.has_route() if self.route_manager else False}")
+            
+            if self.route_manager and self.route_manager.has_route():
+                try:
+                    logger.debug(f"Route manager: chiamata update_position (GPS valid: {position.is_valid})")
+                    update_result = self.route_manager.update_position(position)
+                    logger.debug(f"Route manager: update_result={update_result}")
+                    
+                    # Se lo step è stato aggiornato, aggiorna display e pubblica via MQTT
+                    if update_result.get('step_updated') and update_result.get('current_step'):
+                        current_step = update_result['current_step']
+                        logger.info(f"✅ Step aggiornato: {current_step.index + 1}/{len(self.route_manager.route_steps)} - {current_step.instruction[:50]}...")
+                        
+                        # Prepara dati istruzione per display
+                        instruction_data = {
+                            'instruction': current_step.instruction,
+                            'distance': current_step.distance,
+                            'duration': current_step.duration,
+                            'maneuver': current_step.maneuver,
+                            'icon': current_step.icon
+                        }
+                        
+                        # Aggiorna display
+                        if self.display_controller:
+                            self.display_controller.show_navigation_instruction(instruction_data)
+                            logger.debug("Display aggiornato con nuovo step")
+                        
+                        # Pubblica step corrente via MQTT
+                        if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
+                            step_topic = self.mqtt_client.topics.get('publish', {}).get('route_current')
+                            if not step_topic:
+                                # Crea topic se non esiste
+                                step_topic = f"micronav/device/{self.config['mqtt']['device_id']}/route/current"
+                            
+                            step_data = {
+                                'type': 'step_current',
+                                'step_index': current_step.index,
+                                'instruction': current_step.instruction,
+                                'distance': current_step.distance,
+                                'duration': current_step.duration,
+                                'maneuver': current_step.maneuver,
+                                'icon': current_step.icon,
+                                'timestamp': get_timestamp_ms()
+                            }
+                            
+                            logger.info(f"📤 Pubblicazione step corrente via MQTT su {step_topic}")
+                            self._safe_publish_status(
+                                step_topic,
+                                "step_current",
+                                f"Step corrente: {current_step.instruction[:50]}...",
+                                step_data
+                            )
+                        else:
+                            logger.warning(f"⚠️ MQTT non connesso o non disponibile per pubblicare step corrente")
+                    else:
+                        logger.debug(f"Route manager: step non aggiornato (step_updated={update_result.get('step_updated')}, current_step={update_result.get('current_step') is not None})")
+                    
+                    # Verifica deviazione
+                    if update_result.get('deviation'):
+                        deviation = update_result['deviation']
+                        if deviation.is_deviated:
+                            # Pubblica notifica deviazione via MQTT
+                            if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
+                                deviation_topic = f"micronav/device/{self.config['mqtt']['device_id']}/route/deviation"
+                                deviation_data = {
+                                    'type': 'deviation',
+                                    'distance': deviation.distance,
+                                    'threshold_warning': deviation.threshold_warning,
+                                    'threshold_recalculate': deviation.threshold_recalculate,
+                                    'is_deviated': deviation.is_deviated,
+                                    'timestamp': get_timestamp_ms()
+                                }
+                                
+                                self._safe_publish_status(
+                                    deviation_topic,
+                                    "deviation",
+                                    f"Deviazione rilevata: {deviation.distance:.0f}m",
+                                    deviation_data
+                                )
+                                
+                                # Mostra notifica deviazione sul display
+                                if self.display_controller and deviation.distance > deviation.threshold_warning:
+                                    # TODO: Implementare notifica deviazione sul display
+                                    pass
+                    
+                    # Ricalcolo automatico se necessario
+                    if update_result.get('recalculate_needed'):
+                        try:
+                            logger.info(f"🔄 Avvio ricalcolo automatico percorso (deviazione: {update_result.get('deviation_distance', 0):.0f}m)")
+                            
+                            # Ricalcola percorso
+                            new_route = self.route_manager.recalculate_route(position)
+                            
+                            if new_route:
+                                logger.info("✅ Ricalcolo percorso completato con successo")
+                                
+                                # Imposta nuovo percorso nel route manager
+                                if self.route_manager.set_route(new_route):
+                                    # Aggiorna percorso corrente
+                                    self.current_route = new_route
+                                    
+                                    # Aggiorna display con nuovo percorso
+                                    if self.display_controller:
+                                        # Pulisci display
+                                        self.display_controller.clear_display()
+                                        time.sleep(0.3)
+                                        
+                                        # Mostra panoramica nuovo percorso
+                                        self.display_controller.show_route_overview(new_route)
+                                        
+                                        # Mostra prima istruzione dopo delay
+                                        self._show_first_instruction_after_delay(new_route)
+                                    
+                                    # Pubblica notifica ricalcolo via MQTT
+                                    if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
+                                        recalc_topic = f"micronav/device/{self.config['mqtt']['device_id']}/route/recalculated"
+                                        recalc_data = {
+                                            'type': 'route_recalculated',
+                                            'reason': 'deviation',
+                                            'deviationDistance': update_result.get('deviation_distance', 0),
+                                            'oldRoute': {
+                                                'origin': new_route.get('old_route', {}).get('origin') if new_route.get('old_route') else None,
+                                                'destination': new_route.get('old_route', {}).get('destination') if new_route.get('old_route') else None
+                                            },
+                                            'newRoute': {
+                                                'origin': new_route.get('origin'),
+                                                'destination': new_route.get('destination'),
+                                                'totalDistance': new_route.get('totalDistance', 0),
+                                                'totalDuration': new_route.get('totalDuration', 0)
+                                            },
+                                            'timestamp': get_timestamp_ms()
+                                        }
+                                        
+                                        self._safe_publish_status(
+                                            recalc_topic,
+                                            "route_recalculated",
+                                            f"Percorso ricalcolato automaticamente (deviazione: {update_result.get('deviation_distance', 0):.0f}m)",
+                                            recalc_data
+                                        )
+                                    
+                                    logger.info("✅ Percorso ricalcolato e aggiornato con successo")
+                                else:
+                                    logger.error("❌ Errore impostazione nuovo percorso dopo ricalcolo")
+                            else:
+                                logger.warning("⚠️ Ricalcolo percorso fallito o non disponibile")
+                                
+                        except Exception as e:
+                            logger.error(f"Errore ricalcolo automatico: {e}")
+                            import traceback
+                            logger.error(f"Traceback: {traceback.format_exc()}")
+                    
+                except Exception as e:
+                    logger.error(f"Errore aggiornamento route manager: {e}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+            else:
+                logger.debug(f"Route manager: non attivo (route_manager={self.route_manager is not None}, has_route={self.route_manager.has_route() if self.route_manager else False})")
+            
             # Throttling: invia posizione GPS solo ogni 3 secondi
             current_time = time.time()
             if not hasattr(self, '_last_gps_publish_time'):
@@ -449,6 +625,11 @@ class MicroNavSystem:
                 logger.warning("⚠️ Percorso annullato. Mostra schermata idle.")
                 # Cancella il percorso corrente
                 self.current_route = None
+                
+                # Rimuovi percorso dal route manager
+                if self.route_manager:
+                    self.route_manager.clear_route()
+                
                 if self.display_controller:
                     self.display_controller.current_route = None
                 if self.display_controller.display_state['current_screen'] != 'idle':
@@ -482,6 +663,13 @@ class MicroNavSystem:
             
             # Salva il percorso per riferimento
             self.current_route = data
+            
+            # Imposta percorso nel route manager
+            if self.route_manager:
+                if self.route_manager.set_route(data):
+                    logger.info("✅ Percorso impostato nel Route Manager")
+                else:
+                    logger.warning("⚠️  Errore impostazione percorso nel Route Manager")
             
             # Aggiorna statistiche
             self.system_stats['messages_received'] += 1

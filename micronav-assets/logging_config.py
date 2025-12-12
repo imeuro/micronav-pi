@@ -33,23 +33,23 @@ def setup_logging():
         print(f"⚠️ Impossibile creare directory log {log_dir}: {e}")
         log_config['file'] = '/tmp/micronav.log'  # Fallback per test
     
-    # File handler con rotazione - Livello DEBUG per file
+    # File handler con rotazione - Usa il livello dalla configurazione
     file_handler = RotatingFileHandler(
         log_config['file'],
         maxBytes=log_config['max_size'],
         backupCount=log_config['backup_count']
     )
     file_handler.setFormatter(logging.Formatter(log_config['format']))
-    file_handler.setLevel(logging.DEBUG)  # File: DEBUG (tutto)
+    file_handler.setLevel(level)  # File: usa il livello dalla configurazione
     
-    # Console handler - Livello INFO per console
+    # Console handler - Usa il livello dalla configurazione
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(log_config['format']))
-    console_handler.setLevel(logging.INFO)  # Console: INFO e superiori
+    console_handler.setLevel(level)  # Console: usa il livello dalla configurazione
     
-    # Configura il logger root al livello più basso (DEBUG)
+    # Configura il logger root al livello dalla configurazione
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)  # Logger root: DEBUG (per permettere tutto)
+    root_logger.setLevel(level)  # Logger root: usa il livello dalla configurazione
     
     # Rimuovi handler esistenti per evitare duplicati
     for handler in root_logger.handlers[:]:
