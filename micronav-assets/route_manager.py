@@ -650,6 +650,87 @@ class RouteManager:
         """
         return self.current_step
     
+    def calculate_step_destination_distance(self, gps_position: GPSPosition) -> Optional[float]:
+        """
+        Calcola la distanza dalla posizione GPS corrente alla destinazione dello step corrente
+        
+        Args:
+            gps_position: Posizione GPS corrente
+            
+        Returns:
+            float: Distanza in metri o None se step non valido
+        """
+        if not self.current_step:
+            return None
+        
+        if not gps_position.is_valid:
+            return None
+        
+        try:
+            # Prova a ottenere le coordinate end dello step
+            step_coords = None
+            coordinates = self.current_step.coordinates
+            
+            if not isinstance(coordinates, dict):
+                logger.debug(f"Route manager: step {self.current_step.index} coordinates non è un dict")
+                return None
+            
+            # Prova prima con end
+            step_coords = coordinates.get('end')
+            if step_coords and isinstance(step_coords, dict) and step_coords.get('lat'):
+                step_lat = float(step_coords.get('lat', 0))
+                step_lng = float(step_coords.get('lng', 0))
+                if step_lat != 0 and step_lng != 0:
+                    distance = calculate_distance(
+                        gps_position.latitude,
+                        gps_position.longitude,
+                        step_lat,
+                        step_lng
+                    )
+                    return distance
+            
+            # Fallback: usa geometry (ultimo punto)
+            geometry = coordinates.get('geometry', [])
+            if geometry and isinstance(geometry, list) and len(geometry) > 0:
+                last_point = geometry[-1]
+                if isinstance(last_point, (list, tuple)) and len(last_point) >= 2:
+                    step_lat = float(last_point[0])
+                    step_lng = float(last_point[1])
+                    if step_lat != 0 and step_lng != 0:
+                        distance = calculate_distance(
+                            gps_position.latitude,
+                            gps_position.longitude,
+                            step_lat,
+                            step_lng
+                        )
+                        return distance
+            
+            # Fallback: usa start del prossimo step se disponibile
+            if self.current_step_index + 1 < len(self.route_steps):
+                next_step = self.route_steps[self.current_step_index + 1]
+                next_coords = next_step.coordinates
+                if isinstance(next_coords, dict):
+                    next_start = next_coords.get('start')
+                    if next_start and isinstance(next_start, dict) and next_start.get('lat'):
+                        step_lat = float(next_start.get('lat', 0))
+                        step_lng = float(next_start.get('lng', 0))
+                        if step_lat != 0 and step_lng != 0:
+                            distance = calculate_distance(
+                                gps_position.latitude,
+                                gps_position.longitude,
+                                step_lat,
+                                step_lng
+                            )
+                            return distance
+            
+            # Nessuna coordinata disponibile, restituisci None
+            logger.debug(f"Route manager: nessuna coordinata valida trovata per step {self.current_step.index}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Errore calcolo distanza destinazione step: {e}")
+            return None
+    
     def get_deviation(self) -> Optional[RouteDeviation]:
         """
         Ottiene la deviazione corrente

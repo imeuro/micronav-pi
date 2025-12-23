@@ -538,6 +538,29 @@ class MicroNavDisplayController:
 
 ### Schermate di navigazione
 
+    def _round_distance(self, distance: float) -> float:
+        """
+        Arrotonda la distanza in metri secondo le regole specificate
+        
+        Args:
+            distance: Distanza in metri
+            
+        Returns:
+            float: Distanza arrotondata:
+                - Se < 200m: arrotonda a 10
+                - Se < 500m: arrotonda a 50
+                - Se < 1000m: arrotonda a 100
+                - Se >= 1000m: restituisce senza arrotondamento e faccio direttamente la conversione in km con un decimale quando lo visualizzo
+        """
+        if distance >= 1000:
+            return distance  # Non arrotondare se >= 1000m
+        elif distance < 200:
+            return round(distance / 10) * 10  # Arrotonda a 10
+        elif distance < 500:
+            return round(distance / 50) * 50  # Arrotonda a 50
+        else:
+            return round(distance / 100) * 100  # Arrotonda a 100
+
     def _draw_navigation_content(self, draw, instruction_data: Dict[str, Any] = None, safe_mode: bool = False):
         """Disegna il contenuto della schermata di navigazione"""
         try:
@@ -578,9 +601,11 @@ class MicroNavDisplayController:
             
             # Distanza
             if distance > 0:
-                distance_text = f"{distance}m"
-                if distance >= 1000:
-                    distance_text = f"{distance/1000:.1f}km"
+                # Arrotonda secondo le regole (10m se < 200m, 50m se < 1000m)
+                rounded_distance = self._round_distance(distance)
+                distance_text = f"{int(rounded_distance)}m"
+                if rounded_distance >= 1000:
+                    distance_text = f"{rounded_distance/1000:.1f}km"
                 
                 draw.text(
                     (10, 160),
@@ -934,7 +959,9 @@ class MicroNavDisplayController:
                 draw.text((txt_margin_x, txt_margin_y), type_status, font=self.fonts_sys['small'], fill=self.colors['white'])
             
             # Distanza (in grande)
-            distance_text = f"{int(distance)}m"
+            # Arrotonda secondo le regole (10m se < 200m, 50m se < 1000m)
+            rounded_distance = self._round_distance(distance)
+            distance_text = f"{int(rounded_distance)}m"
             txt_margin_y = 110 + delta_y
             if self.fonts_sys['large']:
                 bbox = draw.textbbox((0, 0), distance_text, font=self.fonts_sys['large'])

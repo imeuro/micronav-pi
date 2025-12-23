@@ -383,10 +383,16 @@ class MicroNavSystem:
                         current_step = update_result['current_step']
                         logger.info(f"✅ Step aggiornato: {current_step.index + 1}/{len(self.route_manager.route_steps)} - {current_step.instruction[:50]}...")
                         
+                        # Calcola distanza dalla posizione GPS corrente alla destinazione dello step
+                        calculated_distance = self.route_manager.calculate_step_destination_distance(position)
+                        
+                        # Usa distanza calcolata se disponibile, altrimenti usa quella originale dello step
+                        step_distance = calculated_distance if calculated_distance is not None else current_step.distance
+                        
                         # Prepara dati istruzione per display
                         instruction_data = {
                             'instruction': current_step.instruction,
-                            'distance': current_step.distance,
+                            'distance': step_distance,
                             'duration': current_step.duration,
                             'maneuver': current_step.maneuver,
                             'icon': current_step.icon
@@ -395,7 +401,7 @@ class MicroNavSystem:
                         # Aggiorna display
                         if self.display_controller:
                             self.display_controller.show_navigation_instruction(instruction_data)
-                            logger.debug("Display aggiornato con nuovo step")
+                            logger.debug(f"Display aggiornato con nuovo step (distanza: {step_distance:.0f}m)")
                         
                         # Pubblica step corrente via MQTT
                         if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
@@ -408,7 +414,7 @@ class MicroNavSystem:
                                 'type': 'step_current',
                                 'step_index': current_step.index,
                                 'instruction': current_step.instruction,
-                                'distance': current_step.distance,
+                                'distance': step_distance,
                                 'duration': current_step.duration,
                                 'maneuver': current_step.maneuver,
                                 'icon': current_step.icon,
@@ -426,6 +432,30 @@ class MicroNavSystem:
                             logger.warning(f"⚠️ MQTT non connesso o non disponibile per pubblicare step corrente")
                     else:
                         logger.debug(f"Route manager: step non aggiornato (step_updated={update_result.get('step_updated')}, current_step={update_result.get('current_step') is not None})")
+                    
+                    # Ricalcola distanza dalla destinazione dello step corrente ad ogni aggiornamento GPS
+                    # (anche se lo step non è cambiato, la distanza deve essere aggiornata)
+                    current_step = self.route_manager.get_current_step()
+                    if current_step and self.display_controller:
+                        # Verifica se siamo in modalità navigazione
+                        current_screen = self.display_controller.display_state.get('current_screen', 'idle')
+                        if current_screen == 'navigation':
+                            # Calcola distanza dalla posizione GPS corrente alla destinazione dello step
+                            calculated_distance = self.route_manager.calculate_step_destination_distance(position)
+                            
+                            if calculated_distance is not None:
+                                # Prepara dati istruzione con distanza ricalcolata
+                                instruction_data = {
+                                    'instruction': current_step.instruction,
+                                    'distance': calculated_distance,
+                                    'duration': current_step.duration,
+                                    'maneuver': current_step.maneuver,
+                                    'icon': current_step.icon
+                                }
+                                
+                                # Aggiorna display con nuova distanza
+                                self.display_controller.show_navigation_instruction(instruction_data)
+                                logger.debug(f"📍 Distanza step aggiornata: {calculated_distance:.0f}m")
                     
                     # Verifica deviazione
                     if update_result.get('deviation'):
