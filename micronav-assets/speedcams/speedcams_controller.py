@@ -22,7 +22,8 @@ class SpeedCamsController:
     
     def __init__(self, gps_controller: Optional[L76KGPSController] = None, 
                  mqtt_client: Optional[MicroNavMQTTClient] = None,
-                 display_controller=None):
+                 display_controller=None,
+                 route_manager=None):
         """
         Inizializza il controller per le speedcam
         
@@ -30,16 +31,19 @@ class SpeedCamsController:
             gps_controller: Controller GPS per ottenere la posizione
             mqtt_client: Client MQTT per pubblicare notifiche
             display_controller: Controller display per visualizzare alert
+            route_manager: Route manager per filtraggio speedcam sul percorso (opzionale)
         """
         self.gps_controller = gps_controller
         self.mqtt_client = mqtt_client
         self.display_controller = display_controller
+        self.route_manager = route_manager
         
         # Configurazione
         self.config = get_speedcam_config()
         self.radius = self.config.get('detection_radius', 1000)  # Default 1km
         self.check_interval = self.config.get('check_interval', 5.0)  # Default 5 secondi
         self.enabled = self.config.get('enabled', True)
+        self.route_proximity_threshold = self.config.get('route_proximity_threshold', 200.0)  # Default 200m
         
         # Database speedcam
         self.speedcams: List[Dict[str, Any]] = []
@@ -174,6 +178,90 @@ class SpeedCamsController:
             logger.error(f"Errore in check_speedcams(): {e}")
             return None
     
+    def _is_speedcam_on_route(self, speedcam: Dict[str, Any], route_geometry: List[Tuple[float, float]], threshold: float) -> bool:
+        """
+        Verifica se una speedcam è vicina al percorso (entro threshold metri)
+        
+        Args:
+            speedcam: Dati speedcam
+            route_geometry: Lista di coordinate del percorso [(lat, lng), ...]
+            threshold: Soglia di distanza in metri
+            
+        Returns:
+            bool: True se la speedcam è entro threshold metri dal percorso
+        """
+        if not route_geometry or len(route_geometry) < 2:
+            return False
+        
+        sc_lat = speedcam.get('lat')
+        sc_lng = speedcam.get('lng')
+        
+        if sc_lat is None or sc_lng is None:
+            return False
+        
+        try:
+            min_distance = float('inf')
+            
+            # Itera su tutti i segmenti del percorso
+            for i in range(len(route_geometry) - 1):
+                point1 = route_geometry[i]
+                point2 = route_geometry[i + 1]
+                
+                # Calcola distanza punto-segmento usando logica simile a route_manager
+                # Calcola distanze da speedcam a estremi del segmento
+                dist_to_start = calculate_distance(sc_lat, sc_lng, point1[0], point1[1])
+                dist_to_end = calculate_distance(sc_lat, sc_lng, point2[0], point2[1])
+                
+                # Lunghezza del segmento
+                seg_length = calculate_distance(point1[0], point1[1], point2[0], point2[1])
+                
+                # Se il segmento è molto corto, usa distanza dal punto medio
+                if seg_length < 10:  # Meno di 10 metri
+                    mid_lat = (point1[0] + point2[0]) / 2
+                    mid_lng = (point1[1] + point2[1]) / 2
+                    segment_distance = calculate_distance(sc_lat, sc_lng, mid_lat, mid_lng)
+                else:
+                    # Calcola proiezione ortogonale della speedcam sul segmento
+                    import math
+                    lat1, lon1 = point1
+                    lat2, lon2 = point2
+                    
+                    # Vettore segmento
+                    dlat_seg = lat2 - lat1
+                    dlon_seg = lon2 - lon1
+                    
+                    # Vettore speedcam-start
+                    dlat_point = sc_lat - lat1
+                    dlon_point = sc_lng - lon1
+                    
+                    # Prodotto scalare normalizzato (proiezione)
+                    seg_length_deg = math.sqrt(dlat_seg**2 + dlon_seg**2)
+                    if seg_length_deg == 0:
+                        segment_distance = dist_to_start
+                    else:
+                        # Parametro t (0-1) che indica posizione proiezione sul segmento
+                        t = (dlat_point * dlat_seg + dlon_point * dlon_seg) / (seg_length_deg**2)
+                        
+                        # Limita t tra 0 e 1
+                        t = max(0, min(1, t))
+                        
+                        # Punto proiezione
+                        proj_lat = lat1 + t * dlat_seg
+                        proj_lng = lon1 + t * dlon_seg
+                        
+                        # Distanza dal punto proiettato
+                        segment_distance = calculate_distance(sc_lat, sc_lng, proj_lat, proj_lng)
+                
+                if segment_distance < min_distance:
+                    min_distance = segment_distance
+            
+            # Verifica se la distanza minima è entro la soglia
+            return min_distance <= threshold
+            
+        except Exception as e:
+            logger.debug(f"Errore verifica speedcam sul percorso: {e}")
+            return False
+    
     def _detect_speedcam(self, position: GPSPosition, radius: float = 1000) -> Optional[Dict[str, Any]]:
         """
         Rileva speedcam entro raggio dalla posizione GPS
@@ -192,6 +280,15 @@ class SpeedCamsController:
         closest_distance = float('inf')
         
         try:
+            # Verifica se c'è un percorso attivo per filtraggio
+            has_active_route = False
+            route_geometry = None
+            if self.route_manager and hasattr(self.route_manager, 'has_route') and self.route_manager.has_route():
+                has_active_route = True
+                if hasattr(self.route_manager, 'route_geometry'):
+                    route_geometry = self.route_manager.route_geometry
+                    logger.debug(f"Filtraggio speedcam attivo: percorso presente, soglia {self.route_proximity_threshold}m")
+            
             # Calcola distanza da tutte le speedcam e trova la più vicina
             for speedcam in self.speedcams:
                 try:
@@ -201,6 +298,11 @@ class SpeedCamsController:
                     # Verifica che le coordinate siano valide
                     if sc_lat is None or sc_lng is None:
                         continue
+                    
+                    # Se c'è un percorso attivo, filtra solo le speedcam sul percorso
+                    if has_active_route and route_geometry:
+                        if not self._is_speedcam_on_route(speedcam, route_geometry, self.route_proximity_threshold):
+                            continue  # Salta questa speedcam, non è sul percorso
                     
                     # Calcola distanza usando formula Haversine
                     distance = calculate_distance(

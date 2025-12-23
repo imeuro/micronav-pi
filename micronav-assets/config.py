@@ -199,7 +199,8 @@ SPEEDCAM_CONFIG = {
     'json_path': BASE_PATH + '/micronav-assets/speedcams/json/SCDB-Northern-Italy_cleaned.json',
     'detection_radius': 1000,      # Raggio di rilevazione in metri (default 1km)
     'check_interval': 5.0,         # Intervallo tra check in secondi (evita check troppo frequenti)
-    'enabled': True                 # Abilita rilevazione speedcam
+    'enabled': True,               # Abilita rilevazione speedcam
+    'route_proximity_threshold': 200.0  # Soglia di distanza dal percorso per filtraggio speedcam in navigazione (metri)
 }
 
 # Configurazione Route Manager (Routing Automatico)

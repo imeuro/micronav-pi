@@ -238,7 +238,8 @@ class MicroNavSystem:
                     self.speedcams_controller = SpeedCamsController(
                         gps_controller=self.gps_controller,
                         mqtt_client=self.mqtt_client,
-                        display_controller=self.display_controller
+                        display_controller=self.display_controller,
+                        route_manager=self.route_manager
                     )
                     self.speedcams_controller.start()
                     
@@ -378,27 +379,37 @@ class MicroNavSystem:
                     update_result = self.route_manager.update_position(position)
                     logger.debug(f"Route manager: update_result={update_result}")
                     
-                    # Se lo step è stato aggiornato, aggiorna display e pubblica via MQTT
-                    if update_result.get('step_updated') and update_result.get('current_step'):
+                    # Se c'è uno step corrente, aggiorna display con distanza ricalcolata
+                    if update_result.get('current_step'):
                         current_step = update_result['current_step']
-                        logger.info(f"✅ Step aggiornato: {current_step.index + 1}/{len(self.route_manager.route_steps)} - {current_step.instruction[:50]}...")
+                        step_updated = update_result.get('step_updated', False)
+                        
+                        if step_updated:
+                            logger.info(f"✅ Step aggiornato: {current_step.index + 1}/{len(self.route_manager.route_steps)} - {current_step.instruction[:50]}...")
+                        
+                        # Usa distanza ricalcolata se disponibile, altrimenti usa quella originale dello step
+                        remaining_distance = update_result.get('remaining_distance')
+                        distance_to_use = remaining_distance if remaining_distance is not None else current_step.distance
                         
                         # Prepara dati istruzione per display
                         instruction_data = {
                             'instruction': current_step.instruction,
-                            'distance': current_step.distance,
+                            'distance': distance_to_use,
                             'duration': current_step.duration,
                             'maneuver': current_step.maneuver,
                             'icon': current_step.icon
                         }
                         
-                        # Aggiorna display
+                        # Aggiorna display (sempre, anche se lo step non è cambiato ma la distanza è stata ricalcolata)
                         if self.display_controller:
                             self.display_controller.show_navigation_instruction(instruction_data)
-                            logger.debug("Display aggiornato con nuovo step")
+                            if step_updated:
+                                logger.debug("Display aggiornato con nuovo step")
+                            elif remaining_distance is not None:
+                                logger.debug(f"Display aggiornato con distanza ricalcolata: {remaining_distance:.0f}m")
                         
-                        # Pubblica step corrente via MQTT
-                        if self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
+                        # Pubblica step corrente via MQTT (solo se lo step è cambiato)
+                        if step_updated and self.mqtt_client and hasattr(self.mqtt_client, 'is_connected') and self.mqtt_client.is_connected:
                             step_topic = self.mqtt_client.topics.get('publish', {}).get('route_current')
                             if not step_topic:
                                 # Crea topic se non esiste
@@ -408,7 +419,7 @@ class MicroNavSystem:
                                 'type': 'step_current',
                                 'step_index': current_step.index,
                                 'instruction': current_step.instruction,
-                                'distance': current_step.distance,
+                                'distance': distance_to_use,
                                 'duration': current_step.duration,
                                 'maneuver': current_step.maneuver,
                                 'icon': current_step.icon,
@@ -422,10 +433,8 @@ class MicroNavSystem:
                                 f"Step corrente: {current_step.instruction[:50]}...",
                                 step_data
                             )
-                        else:
-                            logger.warning(f"⚠️ MQTT non connesso o non disponibile per pubblicare step corrente")
-                    else:
-                        logger.debug(f"Route manager: step non aggiornato (step_updated={update_result.get('step_updated')}, current_step={update_result.get('current_step') is not None})")
+                        elif not step_updated:
+                            logger.debug(f"Route manager: step non aggiornato ma distanza ricalcolata (remaining_distance={remaining_distance:.0f}m se disponibile)")
                     
                     # Verifica deviazione
                     if update_result.get('deviation'):

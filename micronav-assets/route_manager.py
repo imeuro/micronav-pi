@@ -412,6 +412,73 @@ class RouteManager:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
+    def calculate_remaining_distance(self, gps_position: GPSPosition) -> Optional[float]:
+        """
+        Calcola la distanza rimanente dalla posizione GPS corrente al punto di arrivo dello step corrente
+        
+        Args:
+            gps_position: Posizione GPS corrente
+            
+        Returns:
+            float: Distanza rimanente in metri, o None se non calcolabile
+        """
+        if not self.current_step or not gps_position.is_valid:
+            return None
+        
+        try:
+            # Ottieni coordinate di arrivo dello step
+            step_coords = None
+            coordinates = self.current_step.coordinates
+            
+            if isinstance(coordinates, dict):
+                # Prova prima con end (punto di arrivo)
+                step_coords = coordinates.get('end')
+                if step_coords and isinstance(step_coords, dict) and step_coords.get('lat'):
+                    pass  # Usa end
+                else:
+                    # Fallback: usa geometry (ultimo punto)
+                    geometry = coordinates.get('geometry', [])
+                    if geometry and isinstance(geometry, list) and len(geometry) > 0:
+                        last_point = geometry[-1]
+                        if isinstance(last_point, (list, tuple)) and len(last_point) >= 2:
+                            step_coords = {'lat': float(last_point[0]), 'lng': float(last_point[1])}
+                        else:
+                            step_coords = None
+                    else:
+                        step_coords = None
+                
+                # Se ancora non abbiamo coordinate, prova con start come fallback
+                if not step_coords or not step_coords.get('lat'):
+                    step_coords = coordinates.get('start')
+                    if step_coords and isinstance(step_coords, dict) and step_coords.get('lat'):
+                        pass  # Usa start come fallback
+                    else:
+                        step_coords = None
+            
+            if not step_coords or not step_coords.get('lat'):
+                logger.debug(f"Route manager: impossibile calcolare distanza rimanente - coordinate step non disponibili")
+                return None
+            
+            step_lat = float(step_coords.get('lat', 0))
+            step_lng = float(step_coords.get('lng', 0))
+            
+            if step_lat == 0 or step_lng == 0:
+                return None
+            
+            # Calcola distanza dalla posizione GPS corrente al punto di arrivo dello step
+            remaining_distance = calculate_distance(
+                gps_position.latitude,
+                gps_position.longitude,
+                step_lat,
+                step_lng
+            )
+            
+            return remaining_distance
+            
+        except Exception as e:
+            logger.debug(f"Errore calcolo distanza rimanente: {e}")
+            return None
+    
     def calculate_route_distance(self, gps_position: GPSPosition) -> float:
         """
         Calcola la distanza minima dal percorso completo
@@ -603,12 +670,13 @@ class RouteManager:
             gps_position: Posizione GPS corrente
             
         Returns:
-            Dict: Dati aggiornamento (step, deviation)
+            Dict: Dati aggiornamento (step, deviation, remaining_distance)
         """
         result = {
             'step_updated': False,
             'current_step': None,
-            'deviation': None
+            'deviation': None,
+            'remaining_distance': None
         }
         
         try:
@@ -621,6 +689,11 @@ class RouteManager:
                 result['current_step'] = current_step
                 # Verifica se lo step è cambiato
                 result['step_updated'] = (old_step_index != self.current_step_index)
+                
+                # Calcola distanza rimanente allo step (sempre, anche se lo step non è cambiato)
+                remaining_distance = self.calculate_remaining_distance(gps_position)
+                if remaining_distance is not None:
+                    result['remaining_distance'] = remaining_distance
             
             # Verifica deviazione
             deviation = self.check_deviation(gps_position)
