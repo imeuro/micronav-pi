@@ -48,6 +48,7 @@ class SpeedCamsController:
         # Stato rilevazione (anti-duplicati)
         self.last_detected_speedcam_id: Optional[int] = None
         self.last_detected_distance: Optional[float] = None
+        self.min_distance_reached: Optional[float] = None  # Distanza minima raggiunta (per capire se superata)
         self.is_monitoring = False
         
         # Throttling per evitare check troppo frequenti
@@ -226,6 +227,7 @@ class SpeedCamsController:
                     logger.debug(f"🚪 Uscito dal raggio di rilevamento speedcam ID {self.last_detected_speedcam_id}")
                     self.last_detected_speedcam_id = None
                     self.last_detected_distance = None
+                    self.min_distance_reached = None
                     
                     # Nascondi l'alert sul display
                     if self.display_controller:
@@ -235,43 +237,99 @@ class SpeedCamsController:
                         self._redraw_current_screen()
                 return None
             
-            # Verifica anti-duplicati e aggiornamenti distanza
-            # 1. È una speedcam diversa da quella già rilevata → notifica completa
-            # 2. È la stessa speedcam ma la distanza è diminuita significativamente (>50m) → notifica completa
-            # 3. È la stessa speedcam e la distanza è cambiata di almeno 10m → aggiorna solo display
+            # Verifica direzione movimento (avvicinamento vs allontanamento)
             speedcam_id = closest_speedcam.get('id')
             
             should_detect = False  # Notifica completa (log + MQTT + visualizza)
             should_update_distance = False  # Solo aggiornamento visivo distanza
+            is_approaching = False  # Se ci si sta avvicinando
             
             if self.last_detected_speedcam_id is None:
-                # Prima rilevazione
+                # Prima rilevazione: sempre notifica (assumiamo avvicinamento iniziale)
                 should_detect = True
+                is_approaching = True
             elif speedcam_id != self.last_detected_speedcam_id:
-                # Nuova speedcam
+                # Nuova speedcam: sempre notifica (assumiamo avvicinamento iniziale)
                 should_detect = True
+                is_approaching = True
             elif self.last_detected_distance is not None:
-                # Stessa speedcam: calcola differenza distanza
+                # Stessa speedcam: verifica se ci si sta avvicinando o allontanando
                 distance_diff = self.last_detected_distance - closest_distance
                 
-                # Notifica completa se ci si avvicina significativamente (>50m)
-                if distance_diff >= 50:
-                    should_detect = True
-                # Aggiorna solo distanza se cambia di almeno 10m (in qualsiasi direzione)
-                elif abs(distance_diff) >= 10:
-                    should_update_distance = True
+                if distance_diff > 0:
+                    # Distanza diminuita = avvicinamento
+                    is_approaching = True
+                    
+                    # Aggiorna distanza minima raggiunta se necessario
+                    if self.min_distance_reached is None or closest_distance < self.min_distance_reached:
+                        self.min_distance_reached = closest_distance
+                    
+                    # Notifica completa se ci si avvicina significativamente (>50m)
+                    if distance_diff >= 50:
+                        should_detect = True
+                    # Aggiorna solo distanza se ci si avvicina di almeno 10m
+                    elif distance_diff >= 10:
+                        should_update_distance = True
+                else:
+                    # Distanza aumentata = allontanamento
+                    is_approaching = False
+                    
+                    # Se la distanza attuale è maggiore della minima raggiunta, 
+                    # significa che abbiamo superato la speedcam
+                    if self.min_distance_reached is not None and closest_distance > self.min_distance_reached:
+                        # Speedcam superata: nascondi alert e resetta stato
+                        logger.debug(f"✅ Speedcam ID {speedcam_id} superata (distanza minima: {self.min_distance_reached:.0f}m)")
+                        self.last_detected_speedcam_id = None
+                        self.last_detected_distance = None
+                        self.min_distance_reached = None
+                        
+                        # Nascondi l'alert sul display
+                        if self.display_controller:
+                            self.display_controller.current_speedcam = None
+                            self.display_controller.current_speedcam_distance = None
+                            self._redraw_current_screen()
+                        
+                        return None
+                    else:
+                        # Allontanamento ma non ancora superata: non notificare, solo aggiorna distanza se significativo
+                        if abs(distance_diff) >= 10:
+                            should_update_distance = True
             
-            if should_detect:
+            # Notifica solo se ci si sta avvicinando
+            if should_detect and is_approaching:
                 # Aggiorna stato
                 self.last_detected_speedcam_id = speedcam_id
                 self.last_detected_distance = closest_distance
+                
+                # Aggiorna distanza minima se necessario
+                if self.min_distance_reached is None or closest_distance < self.min_distance_reached:
+                    self.min_distance_reached = closest_distance
                 
                 # Notifica rilevazione completa (log + MQTT + visualizza)
                 self._notify_speedcam_detected(closest_speedcam, closest_distance)
                 
                 return closest_speedcam
-            elif should_update_distance:
-                # Aggiorna solo la distanza mostrata (senza log/MQTT)
+            elif should_update_distance and is_approaching:
+                # Aggiorna solo la distanza mostrata (senza log/MQTT) solo se ci si avvicina
+                self.last_detected_distance = closest_distance
+                
+                # Aggiorna distanza minima se necessario
+                if self.min_distance_reached is None or closest_distance < self.min_distance_reached:
+                    self.min_distance_reached = closest_distance
+                
+                if self.display_controller:
+                    # Aggiorna solo la distanza nell'alert
+                    self.display_controller.current_speedcam_distance = closest_distance
+                    # Ridisegna l'alert con la nuova distanza (solo aggiornamento visivo)
+                    self.display_controller.show_speedcam_alert(
+                        self.display_controller.current_speedcam,
+                        closest_distance
+                    )
+                
+                logger.debug(f"📏 Aggiornamento distanza speedcam ID {speedcam_id}: {closest_distance:.0f}m (avvicinamento)")
+                return closest_speedcam
+            elif should_update_distance and not is_approaching:
+                # Allontanamento: aggiorna solo distanza senza notificare
                 self.last_detected_distance = closest_distance
                 
                 if self.display_controller:
@@ -283,7 +341,7 @@ class SpeedCamsController:
                         closest_distance
                     )
                 
-                logger.debug(f"📏 Aggiornamento distanza speedcam ID {speedcam_id}: {closest_distance:.0f}m")
+                logger.debug(f"📏 Aggiornamento distanza speedcam ID {speedcam_id}: {closest_distance:.0f}m (allontanamento, no notifica)")
                 return closest_speedcam
             
             return None

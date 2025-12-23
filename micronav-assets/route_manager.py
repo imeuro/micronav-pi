@@ -96,6 +96,18 @@ class RouteManager:
         self.mapbox_language = mapbox_config.get('language', 'it')
         self.mapbox_timeout = mapbox_config.get('timeout', 10.0)
         
+        # Log stato configurazione Mapbox
+        if self.mapbox_enabled:
+            if self.mapbox_access_token:
+                # Nascondi il token nei log (mostra solo primi 10 caratteri)
+                token_preview = self.mapbox_access_token[:10] + '...' if len(self.mapbox_access_token) > 10 else '***'
+                logger.info(f"✅ Mapbox configurato - Token: {token_preview}, API: {self.mapbox_api_base_url}")
+            else:
+                logger.warning("⚠️ Mapbox abilitato ma access_token non configurato - ricalcolo automatico non disponibile")
+                logger.warning("   Verifica che MAPBOX_ACCESS_TOKEN sia presente nel file .env")
+        else:
+            logger.info("ℹ️ Mapbox disabilitato - ricalcolo automatico non disponibile")
+        
         # Flag per evitare ricalcoli multipli simultanei
         self.recalculating = False
         self.last_recalculate_time: float = 0.0
@@ -686,8 +698,10 @@ class RouteManager:
             logger.warning("⚠️ Ricalcolo automatico disabilitato in configurazione")
             return None
         
-        if not self.mapbox_access_token:
+        # Verifica che il token sia presente e non vuoto
+        if not self.mapbox_access_token or not self.mapbox_access_token.strip():
             logger.error("❌ API Key Mapbox non configurata - impossibile ricalcolare percorso")
+            logger.error("   Verifica che MAPBOX_ACCESS_TOKEN sia presente nel file .env e non sia vuoto")
             return None
         
         if not self.destination_coords:
