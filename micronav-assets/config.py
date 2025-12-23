@@ -107,7 +107,7 @@ DISPLAY_CONFIG = {
     'invert': False,        # Non invertire colori
     'h_offset': 0,          # Offset orizzontale
     'v_offset': 0,          # Offset verticale
-    'brightness': 30        # Brightness del display (0-100)
+    'brightness': 100        # Brightness del display (0-100)
 }
 
 # Configurazione GPIO per Display ST7789V3 1.47" Waveshare
@@ -221,7 +221,7 @@ MAPBOX_CONFIG = {
 
 # Configurazione Logging
 LOGGING_CONFIG = {
-    'level': 'DEBUG',
+    'level': 'INFO',
     'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     'file': BASE_PATH + '/micronav-assets/logs/micronav.log',
     'max_size': 10 * 1024 * 1024,  # 10MB
